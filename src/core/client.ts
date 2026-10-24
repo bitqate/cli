@@ -90,7 +90,7 @@ export class ApiClient {
     }
     const target = url.toString();
 
-    if (this.dryRun) {
+    if (this.dryRun && method !== 'GET') {
       throw new DryRunRequest(method, target, opts.body ?? null);
     }
 

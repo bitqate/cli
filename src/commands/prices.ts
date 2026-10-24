@@ -1,3 +1,4 @@
+import { moneyMo } from '../ui/format';
 import { register } from '../registry';
 
 register({
@@ -14,8 +15,14 @@ register({
       data,
       render: (rows: any[]) => ({
         table: {
-          head: ['KEY', 'PRICE'],
-          rows: rows.map((p) => [p.key ?? '', String(p.price ?? '')]),
+          columns: [{ title: 'Key' }, { title: 'Price' }],
+          rows: rows.map((p) => [
+            p.key ?? '',
+            typeof p.price === 'number'
+              ? moneyMo(p.price)
+              : String(p.price ?? ''),
+          ]),
+          footer: rows.length ? undefined : 'No prices returned.',
         },
       }),
     };

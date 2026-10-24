@@ -1,68 +1,93 @@
 import { readFileSync } from 'node:fs';
 import { CliError, usageError } from '../core/errors';
-import { kvLines } from '../core/output';
-import { pollUntil } from '../core/poll';
+import { confirmDestroy, waitPoll } from '../core/confirm';
+import { portalUrl, openUrl } from '../core/portal';
+import { resolveOption, resolveResource } from '../core/resolve';
+import { detailToLines, sanitize } from '../core/output';
+import { task } from '../ui/spinner';
 import {
-  cpusToUnits,
-  positiveInt,
-  validateSshPublicKey,
-} from '../core/validate';
-import { register, type RunContext } from '../registry';
+  elapsedLong,
+  memory,
+  moneyMo,
+  relTime,
+  shortId,
+  sizeLine,
+} from '../ui/format';
+import { statusText } from '../ui/theme';
+import { positiveInt, validateSshPublicKey } from '../core/validate';
+import { register, type CommandResult, type RunContext } from '../registry';
+import { vmWizard } from '../wizards/vm';
+import { sshInto } from './tools';
 
-const waitFlag = {
-  wait: {
-    type: 'boolean' as const,
-    description: 'Wait until the operation finishes',
-  },
-  'wait-timeout': {
-    type: 'string' as const,
-    description: 'Seconds to wait before giving up (default 600)',
-  },
-};
+const NAME_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
+
+const VM_OK = new Set(['active', 'running']);
+const VM_FAIL = new Set(['error', 'suspended']);
+
+function ok(data: any, msg: string): CommandResult {
+  return { data, render: () => ({ lines: [msg] }) };
+}
+
+function checkmark(ui: { theme: any }, msg: string): string {
+  return `${ui.theme.paint('success', ui.theme.glyph('check'))} ${msg}`;
+}
 
 function waitTimeoutMs(ctx: RunContext): number {
   const v = ctx.flags['wait-timeout'];
   return v ? positiveInt(String(v), 'wait-timeout') * 1000 : 600_000;
 }
 
-const VM_OK = new Set(['active', 'running']);
-const VM_FAIL = new Set(['error', 'suspended']);
+async function resolveVm(ctx: RunContext, ref?: string) {
+  return resolveResource(ctx, 'vms', ref ?? ctx.args[0], ctx.io.theme);
+}
+
+async function fetchVm(ctx: RunContext, id: string) {
+  const resp = await ctx.api().get(['vms', id]);
+  return resp?.vm;
+}
 
 async function waitForVm(
   ctx: RunContext,
-  id: string,
+  resolved: { id: string; name: string },
   targets: Set<string>,
   fail: Set<string>,
   label: string,
 ) {
-  return pollUntil(
-    async () => {
-      const resp = await ctx.api().get(['vms', id]);
-      const status = resp?.vm?.status;
-      if (targets.has(status)) return resp.vm;
-      if (fail.has(status))
-        throw new CliError('server', `VM entered state '${status}'`);
-      return null;
-    },
-    { timeoutMs: waitTimeoutMs(ctx), label },
+  return task(
+    `${label} ${resolved.name}`,
+    ctx.io.theme,
+    async (t) =>
+      waitPoll(
+        { name: resolved.name, kind: 'vms' },
+        async () => {
+          const vm = await fetchVm(ctx, resolved.id);
+          const status = vm?.status ?? 'unknown';
+          t.update(status);
+          if (targets.has(status)) return { value: vm, status };
+          if (fail.has(status))
+            throw new CliError('server', `VM entered state '${status}'`);
+          return { value: null, status };
+        },
+        { timeoutMs: waitTimeoutMs(ctx), label },
+      ),
+    { endStyle: 'ok' },
   );
 }
 
-function vmTable(vms: any[]) {
-  return {
-    table: {
-      head: ['ID', 'NAME', 'STATUS', 'IPV4', 'CPU', 'MEM MB', 'DISK GB'],
-      rows: vms.map((v) => [
-        v.id ?? '',
-        v.name ?? '',
-        v.status ?? '',
-        v.ipv4 ?? '',
-        String(v.resources?.cpu_cores ?? ''),
-        String(v.resources?.memory_mb ?? ''),
-        String(v.resources?.disk_gb ?? ''),
-      ]),
-    },
-  };
+function vmRow(v: any, tty: boolean) {
+  return [
+    v.name ?? '',
+    tty ? shortId(v.id ?? '') : (v.id ?? ''),
+    '',
+    v.status ?? '',
+    sizeLine(
+      v.resources?.cpu_cores ?? 0,
+      v.resources?.memory_mb ?? 0,
+      v.resources?.disk_gb ?? 0,
+    ),
+    v.ipv4 ?? '',
+    relTime(v.created_at),
+  ];
 }
 
 register({
@@ -71,35 +96,98 @@ register({
   args: [],
   flags: {},
   scope: 'vms:read',
+  aliases: ['ls'],
   examples: [
     'bitqate vms list',
-    'bitqate vms list --json',
+    'bitqate vms ls --json',
     'bitqate vms list -q',
   ],
   async run(ctx) {
     const resp = await ctx.api().get(['vms']);
     const data = resp?.vms ?? [];
-    return { data, render: (rows: any[]) => vmTable(rows) };
+    return {
+      data,
+      render: (rows: any[], ui) => {
+        if (!rows.length)
+          return {
+            lines: ['No VMs yet. Create one with `bitqate vms create`.'],
+          };
+        const running = rows.filter((v) =>
+          ['running', 'active'].includes(v.status),
+        ).length;
+        const tty = !!process.stdout.isTTY;
+        const tableRows = rows.map((v) => {
+          const r = vmRow(v, tty);
+          r[2] = statusText(ui.theme, v.status ?? '');
+          return r;
+        });
+        return {
+          table: {
+            columns: [
+              { title: 'Name', truncate: true },
+              { title: 'ID', priority: 1 },
+              { title: 'Status', priority: 8 },
+              { title: 'Size', priority: 4 },
+              { title: 'IPv4', priority: 6 },
+              { title: 'Created', priority: 2 },
+            ],
+            rows: tableRows.map((r) => [r[0], r[1], r[2], r[4], r[5], r[6]]),
+            footer: `${rows.length} VM${rows.length === 1 ? '' : 's'} · ${running} running`,
+          },
+        };
+      },
+    };
   },
 });
 
 register({
   path: ['vms', 'get'],
   summary: 'Show one VM',
-  args: [{ name: 'id', required: true, description: 'VM ID' }],
+  args: [{ name: 'id', required: false, description: 'VM name or ID' }],
   flags: {},
   scope: 'vms:read',
-  examples: ['bitqate vms get vm_abc123'],
+  aliases: ['show', 'info'],
+  examples: ['bitqate vms get dizzy-puma'],
   async run(ctx) {
-    const resp = await ctx.api().get(['vms', ctx.args[0]]);
-    const data = resp?.vm ?? {};
-    return { data, render: (d) => ({ lines: kvLines(d) }) };
+    const { id } = await resolveVm(ctx);
+    const vm = await fetchVm(ctx, id);
+    if (!vm) throw new CliError('not_found', `VM '${id}' not found`);
+    const data = vm;
+    return {
+      data,
+      render: (v: any, ui) => ({
+        detail: {
+          title: `${v.name ?? ''}  ${statusText(ui.theme, v.status ?? '')}`,
+          id: v.id,
+          fields: [
+            ['Region', v.region?.name ?? v.pve_node_id],
+            ['OS', v.os_name ?? v.operating_system_id],
+            [
+              'Size',
+              `${v.resources?.cpu_cores ?? 0} vCPU · ${memory(v.resources?.memory_mb ?? 0)} RAM · ${v.resources?.disk_gb ?? 0} GB disk`,
+            ],
+            ['IPv4', v.ipv4],
+            ['IPv6', v.ipv6],
+            ['Host key', v.ssh?.host_key_fingerprint],
+            ['Created', relTime(v.created_at)],
+            [
+              'Renews',
+              `${relTime(v.expires_at)} · auto-renew ${v.auto_renew ? 'on' : 'off'}`,
+            ],
+          ],
+          hints: [
+            [`bitqate vms ssh ${v.name ?? v.id}`, 'connect over SSH'],
+            [`bitqate open ${v.name ?? v.id}`, 'open in the dashboard'],
+          ],
+        },
+      }),
+    };
   },
 });
 
 register({
   path: ['vms', 'nodes'],
-  summary: 'List available VM host nodes',
+  summary: 'List host nodes',
   args: [],
   flags: {},
   scope: 'any',
@@ -111,8 +199,9 @@ register({
       data,
       render: (rows: any[]) => ({
         table: {
-          head: ['ID', 'NAME', 'NICKNAME'],
+          columns: [{ title: 'ID' }, { title: 'Name' }, { title: 'Nickname' }],
           rows: rows.map((n) => [n.id ?? '', n.name ?? '', n.nickname ?? '']),
+          footer: rows.length ? undefined : 'No nodes available.',
         },
       }),
     };
@@ -121,13 +210,17 @@ register({
 
 register({
   path: ['vms', 'os'],
-  summary: 'List operating system templates',
+  summary: 'List OS templates',
   args: [],
   flags: {
-    node: { type: 'string', description: 'Only show templates on this node' },
+    node: {
+      type: 'string',
+      placeholder: 'node',
+      description: 'Only show templates on this node',
+    },
   },
   scope: 'any',
-  examples: ['bitqate vms os', 'bitqate vms os --node pve-fra-1'],
+  examples: ['bitqate vms os', 'bitqate vms os --node montreal'],
   async run(ctx) {
     const resp = await ctx.api().get(['operating-systems']);
     let data: any[] = resp?.operating_systems ?? [];
@@ -137,12 +230,13 @@ register({
       data,
       render: (rows: any[]) => ({
         table: {
-          head: ['ID', 'NAME', 'NODES'],
+          columns: [{ title: 'ID' }, { title: 'Name' }, { title: 'Nodes' }],
           rows: rows.map((o) => [
             o.id ?? '',
             o.name ?? '',
             (o.node_ids ?? []).join(','),
           ]),
+          footer: rows.length ? undefined : 'No OS templates on this node.',
         },
       }),
     };
@@ -151,66 +245,157 @@ register({
 
 register({
   path: ['vms', 'create'],
-  summary: 'Create a VM (charges your balance)',
+  summary: 'Create a VM',
   args: [],
   flags: {
-    node: { type: 'string', required: true, description: 'PVE node ID' },
-    os: { type: 'string', required: true, description: 'Operating system ID' },
+    node: {
+      type: 'string',
+      placeholder: 'node',
+      description: 'Node name, nickname or ID',
+    },
+    os: {
+      type: 'string',
+      placeholder: 'os',
+      description: 'Operating system name or ID',
+    },
     'memory-mb': {
       type: 'string',
-      required: true,
+      placeholder: 'mb',
       description: 'Memory in MB',
     },
-    cpus: { type: 'string', required: true, description: 'CPU cores' },
-    'disk-gb': { type: 'string', required: true, description: 'Disk in GB' },
-    name: { type: 'string', description: 'VM name' },
+    cpus: { type: 'string', placeholder: 'n', description: 'CPU cores' },
+    'disk-gb': { type: 'string', placeholder: 'gb', description: 'Disk in GB' },
+    name: { type: 'string', placeholder: 'name', description: 'VM name' },
     'ssh-key-file': {
       type: 'string',
-      description: 'Path to a .pub OpenSSH public key',
+      placeholder: 'path',
+      description: 'Path to a .pub OpenSSH key',
     },
-    workspace: { type: 'string', description: 'Workspace (team) ID' },
+    workspace: {
+      type: 'string',
+      placeholder: 'workspace',
+      description: 'Workspace name or ID',
+    },
     'auto-renew': { type: 'boolean', description: 'Enable auto-renewal' },
-    ...waitFlag,
+    'ipv6-only': { type: 'boolean', description: 'No public IPv4 address' },
+    wait: { type: 'boolean', description: 'Wait for provisioning' },
+    'wait-timeout': {
+      type: 'string',
+      placeholder: 'seconds',
+      description: 'Seconds before giving up',
+    },
   },
   scope: 'vms:write',
+  charges: true,
+  interactive: true,
+  aliases: ['new'],
   examples: [
-    'bitqate vms create --node pve-fra-1 --os debian-12 --memory-mb 4096 --cpus 2 --disk-gb 40 --name web-1 --ssh-key-file ~/.ssh/id_ed25519.pub --wait',
+    'bitqate vms create',
+    'bitqate vms create --node montreal --os "debian 12" --memory-mb 4096 --cpus 2 --disk-gb 40',
   ],
   async run(ctx) {
-    const body: Record<string, unknown> = {
-      pve_node_id: ctx.flags.node,
-      operating_system_id: ctx.flags.os,
-      memory: positiveInt(ctx.flags['memory-mb'], 'memory-mb'),
-      cpu: Number(ctx.flags.cpus),
-      drive: positiveInt(ctx.flags['disk-gb'], 'disk-gb'),
-    };
-    if (!Number.isFinite(body.cpu) || (body.cpu as number) <= 0)
-      throw usageError('--cpus must be a positive number');
-    if (ctx.flags.name) body.name = ctx.flags.name;
-    if (ctx.flags.workspace) body.team_id = ctx.flags.workspace;
-    if (ctx.flags['auto-renew']) body.auto_renew = true;
-    if (ctx.flags['ssh-key-file']) {
-      let content: string;
-      try {
-        content = readFileSync(ctx.flags['ssh-key-file'], 'utf8');
-      } catch {
-        throw usageError(`Cannot read ${ctx.flags['ssh-key-file']}`);
-      }
-      body.ssh_public_key = validateSshPublicKey(content);
-    }
-    const resp = await ctx.api().post(['vms'], body);
-    const vm = resp?.vm ?? {};
-    if (ctx.flags.wait && vm.id) {
-      const final = await waitForVm(
+    const missingRequired =
+      !ctx.flags.node ||
+      !ctx.flags.os ||
+      !ctx.flags['memory-mb'] ||
+      !ctx.flags.cpus ||
+      !ctx.flags['disk-gb'];
+    const useWizard = ctx.io.interactive && !ctx.io.json && missingRequired;
+
+    if (!useWizard) {
+      const node = await resolveOption(
         ctx,
-        vm.id,
-        VM_OK,
-        new Set([...VM_FAIL]),
-        'VM provisioning',
+        ['vm-nodes'],
+        ctx.flags.node,
+        ['id', 'nickname', 'name'],
+        'node',
       );
-      return { data: final, render: (d) => ({ lines: kvLines(d) }) };
+      const os = await resolveOption(
+        ctx,
+        ['operating-systems'],
+        ctx.flags.os,
+        ['id', 'name'],
+        'OS',
+        (o) => (o.node_ids ?? []).includes(node),
+      );
+      const body: Record<string, unknown> = {
+        pve_node_id: node,
+        operating_system_id: os,
+        memory: positiveInt(ctx.flags['memory-mb'], 'memory-mb'),
+        cpu: Number(ctx.flags.cpus),
+        drive: positiveInt(ctx.flags['disk-gb'], 'disk-gb'),
+      };
+      if (!Number.isFinite(body.cpu) || (body.cpu as number) <= 0)
+        throw usageError('--cpus must be a positive number');
+      if (ctx.flags.name) body.name = ctx.flags.name;
+      if (ctx.flags.workspace)
+        body.team_id = await resolveOption(
+          ctx,
+          ['workspaces'],
+          ctx.flags.workspace,
+          ['id', 'name'],
+          'workspace',
+        );
+      if (ctx.flags['auto-renew']) body.auto_renew = true;
+      if (ctx.flags['ipv6-only']) body.ipv4 = false;
+      if (ctx.flags['ssh-key-file']) {
+        let content: string;
+        try {
+          content = readFileSync(ctx.flags['ssh-key-file'], 'utf8');
+        } catch {
+          throw usageError(`Cannot read ${ctx.flags['ssh-key-file']}`);
+        }
+        body.ssh_public_key = validateSshPublicKey(content);
+      }
+      const resp = await ctx.api().post(['vms'], body);
+      const vm = resp?.vm ?? {};
+      if (ctx.flags.wait && vm.id) {
+        const final = await waitForVm(
+          ctx,
+          { id: vm.id, name: vm.name ?? vm.id },
+          VM_OK,
+          VM_FAIL,
+          'Provisioning',
+        );
+        return {
+          data: final,
+          render: (v, ui) => ({
+            lines: [checkmark(ui, `${v.name ?? v.id} is ${v.status}`)],
+          }),
+        };
+      }
+      return ok(vm, vm.id ? `Created ${vm.name ?? vm.id}` : 'Created');
     }
-    return { data: vm, render: (d) => ({ lines: kvLines(d) }) };
+
+    const { body } = await vmWizard(ctx);
+
+    const t0 = Date.now();
+    const created = await task('Creating VM', ctx.io.theme, async () => {
+      const resp = await ctx.api().post(['vms'], body);
+      return resp?.vm;
+    });
+    if (!created?.id)
+      throw new CliError('server', 'Unexpected create response');
+
+    const waited = await waitForVm(
+      ctx,
+      { id: created.id, name: created.name ?? created.id },
+      VM_OK,
+      VM_FAIL,
+      'Provisioning',
+    );
+    const secs = (Date.now() - t0) / 1000;
+    const finish = `${created.name ?? created.id} is running (${elapsedLong(secs)})`;
+    const ipv4Text = waited.ipv4 ? ` · ${waited.ipv4}` : '';
+    return {
+      data: waited,
+      render: (v, ui) => ({
+        lines: [
+          checkmark(ui, `${finish}${ipv4Text}`),
+          `  ${ui.theme.paint('muted', `bitqate vms ssh ${created.name ?? created.id}`)}`,
+        ],
+      }),
+    };
   },
 });
 
@@ -218,48 +403,63 @@ for (const op of ['start', 'stop', 'restart'] as const) {
   register({
     path: ['vms', op],
     summary: `${op[0].toUpperCase() + op.slice(1)} a VM`,
-    args: [{ name: 'id', required: true, description: 'VM ID' }],
-    flags: { ...waitFlag },
+    args: [{ name: 'id', required: false, description: 'VM name or ID' }],
+    flags: {
+      wait: { type: 'boolean', description: 'Wait until it finishes' },
+      'wait-timeout': {
+        type: 'string',
+        placeholder: 'seconds',
+        description: 'Seconds before giving up',
+      },
+    },
     scope: 'vms:power',
-    destructive: false,
-    examples: [
-      `bitqate vms ${op} vm_abc123`,
-      `bitqate vms ${op} vm_abc123 --wait`,
-    ],
+    examples: [`bitqate vms ${op} dizzy-puma --wait`],
     async run(ctx) {
-      const resp = await ctx.api().post(['vms', ctx.args[0], op]);
-      if (!ctx.flags.wait) {
-        return {
-          data: { id: ctx.args[0], message: resp?.message ?? '' },
-          render: (d) => ({ lines: [d.message] }),
-        };
-      }
+      const resolved = await resolveVm(ctx);
+      await ctx.api().post(['vms', resolved.id, op]);
+      if (!ctx.flags.wait) return ok({ id: resolved.id }, '');
       const targets =
         op === 'stop' ? new Set(['stopped']) : new Set(['running', 'active']);
-      const final = await waitForVm(
+      const vm = await waitForVm(
         ctx,
-        ctx.args[0],
+        resolved,
         targets,
         VM_FAIL,
-        `VM ${op}`,
+        `${op[0].toUpperCase() + op.slice(1)}ing`,
       );
-      return { data: final, render: (d) => ({ lines: kvLines(d) }) };
+      return {
+        data: vm,
+        render: (v, ui) => ({
+          lines: [
+            checkmark(
+              ui,
+              `${op === 'stop' ? 'Stopped' : op === 'start' ? 'Started' : 'Restarted'} ${resolved.name}`,
+            ),
+          ],
+        }),
+      };
     },
   });
 }
 
 register({
   path: ['vms', 'resize'],
-  summary: 'Resize a VM (charges your balance)',
-  args: [{ name: 'id', required: true, description: 'VM ID' }],
+  summary: 'Change CPU, memory or disk',
+  args: [{ name: 'id', required: false, description: 'VM name or ID' }],
   flags: {
-    'memory-mb': { type: 'string', description: 'Memory in MB' },
-    cpus: { type: 'string', description: 'CPU cores' },
-    'disk-gb': { type: 'string', description: 'Disk in GB' },
+    'memory-mb': {
+      type: 'string',
+      placeholder: 'mb',
+      description: 'Memory in MB',
+    },
+    cpus: { type: 'string', placeholder: 'n', description: 'CPU cores' },
+    'disk-gb': { type: 'string', placeholder: 'gb', description: 'Disk in GB' },
   },
   scope: 'vms:write',
-  examples: ['bitqate vms resize vm_abc123 --memory-mb 8192 --cpus 4'],
+  charges: true,
+  examples: ['bitqate vms resize dizzy-puma --memory-mb 8192 --cpus 4'],
   async run(ctx) {
+    const { id, name } = await resolveVm(ctx);
     const body: Record<string, unknown> = {};
     if (ctx.flags['memory-mb'] !== undefined)
       body.memory = positiveInt(ctx.flags['memory-mb'], 'memory-mb');
@@ -273,13 +473,23 @@ register({
       body.drive = positiveInt(ctx.flags['disk-gb'], 'disk-gb');
     if (!Object.keys(body).length)
       throw usageError('Pass at least one of --memory-mb, --cpus or --disk-gb');
-    const resp = await ctx.api().patch(['vms', ctx.args[0], 'resize'], body);
+    const resp = await ctx.api().patch(['vms', id, 'resize'], body);
     const data = {
       ...(resp?.vm ?? {}),
       charged: resp?.charged,
       newMonthlyCost: resp?.newMonthlyCost,
     };
-    return { data, render: (d) => ({ lines: kvLines(d) }) };
+    return {
+      data,
+      render: (v, ui) => ({
+        lines: [
+          checkmark(
+            ui,
+            `Resized ${name}${resp?.newMonthlyCost != null ? ` · ${moneyMo(resp.newMonthlyCost)}/mo`.replace('/mo/mo', '/mo') : ''}`,
+          ),
+        ],
+      }),
+    };
   },
 });
 
@@ -287,126 +497,157 @@ register({
   path: ['vms', 'rename'],
   summary: 'Rename a VM',
   args: [
-    { name: 'id', required: true, description: 'VM ID' },
+    { name: 'id', required: false, description: 'VM name or ID' },
     { name: 'name', required: true, description: 'New name' },
   ],
   flags: {},
   scope: 'vms:write',
-  examples: ['bitqate vms rename vm_abc123 web-2'],
+  examples: ['bitqate vms rename dizzy-puma web-2'],
   async run(ctx) {
-    const resp = await ctx.api().patch(['vms', ctx.args[0], 'name'], {
-      name: ctx.args[1],
-    });
-    const data = resp?.vm ?? { id: ctx.args[0], name: ctx.args[1] };
-    return { data, render: (d) => ({ lines: kvLines(d) }) };
+    const { id, name: old } = await resolveVm(ctx);
+    const resp = await ctx
+      .api()
+      .patch(['vms', id, 'name'], { name: ctx.args[1] });
+    const data = resp?.vm ?? { id, name: ctx.args[1] };
+    return {
+      data,
+      render: (v, ui) => ({
+        lines: [checkmark(ui, `Renamed ${old} → ${ctx.args[1]}`)],
+      }),
+    };
   },
 });
 
 register({
   path: ['vms', 'auto-renew'],
-  summary: 'Enable or disable VM auto-renewal',
+  summary: 'Turn auto-renew on or off',
   args: [
-    { name: 'id', required: true, description: 'VM ID' },
+    { name: 'id', required: false, description: 'VM name or ID' },
     { name: 'state', required: true, description: 'on or off' },
   ],
   flags: {},
   scope: 'vms:write',
-  examples: ['bitqate vms auto-renew vm_abc123 on'],
+  examples: ['bitqate vms auto-renew dizzy-puma on'],
   async run(ctx) {
     const state = ctx.args[1];
     if (state !== 'on' && state !== 'off')
       throw usageError("Expected 'on' or 'off'");
-    const resp = await ctx.api().patch(['vms', ctx.args[0], 'auto-renew'], {
-      auto_renew: state === 'on',
-    });
-    return {
-      data: {
-        id: ctx.args[0],
-        auto_renew: state === 'on',
-        message: resp?.message,
-      },
-      render: (d) => ({ lines: [d.message ?? ''] }),
-    };
+    const { id, name } = await resolveVm(ctx);
+    await ctx
+      .api()
+      .patch(['vms', id, 'auto-renew'], { auto_renew: state === 'on' });
+    return ok({ id, auto_renew: state === 'on' }, '');
   },
 });
 
 register({
   path: ['vms', 'renew'],
-  summary: 'Renew a VM for 30 days (charges your balance)',
-  args: [{ name: 'id', required: true, description: 'VM ID' }],
+  summary: 'Renew for 30 days',
+  args: [{ name: 'id', required: false, description: 'VM name or ID' }],
   flags: {},
   scope: 'vms:write',
-  examples: ['bitqate vms renew vm_abc123'],
+  charges: true,
+  examples: ['bitqate vms renew dizzy-puma'],
   async run(ctx) {
-    const resp = await ctx.api().post(['vms', ctx.args[0], 'renew']);
-    const data = {
-      id: ctx.args[0],
-      message: resp?.message,
-      expires_at: resp?.expires_at,
+    const { id, name } = await resolveVm(ctx);
+    const resp = await ctx.api().post(['vms', id, 'renew']);
+    return {
+      data: { id, expires_at: resp?.expires_at },
+      render: (v, ui) => ({
+        lines: [checkmark(ui, `Renewed ${name} for 30 days`)],
+      }),
     };
-    return { data, render: (d) => ({ lines: kvLines(d) }) };
   },
 });
 
 register({
   path: ['vms', 'reinstall'],
-  summary: 'Reinstall a VM from a fresh OS template (destroys its disk)',
-  args: [{ name: 'id', required: true, description: 'VM ID' }],
+  summary: 'Reinstall from a fresh OS image',
+  args: [{ name: 'id', required: false, description: 'VM name or ID' }],
   flags: {
-    os: { type: 'string', required: true, description: 'Operating system ID' },
+    os: {
+      type: 'string',
+      placeholder: 'os',
+      required: true,
+      description: 'Operating system name or ID',
+    },
   },
   scope: 'vms:delete',
   destructive: true,
-  examples: ['bitqate vms reinstall vm_abc123 --os debian-12'],
+  confirmInside: true,
+  examples: ['bitqate vms reinstall dizzy-puma --os "debian 12"'],
   async run(ctx) {
-    const resp = await ctx.api().post(['vms', ctx.args[0], 'reinstall'], {
-      operating_system_id: ctx.flags.os,
+    const { id, name } = await resolveVm(ctx);
+    await confirmDestroy(ctx, name);
+    const os = await resolveOption(
+      ctx,
+      ['operating-systems'],
+      ctx.flags.os,
+      ['id', 'name'],
+      'OS',
+    );
+    const resp = await ctx.api().post(['vms', id, 'reinstall'], {
+      operating_system_id: os,
     });
-    const data = { ...(resp?.vm ?? {}), message: resp?.message };
-    return { data, render: (d) => ({ lines: [d.message ?? ''] }) };
+    return {
+      data: { ...(resp?.vm ?? {}), message: resp?.message },
+      render: (v, ui) => ({ lines: [checkmark(ui, `Reinstalling ${name}`)] }),
+    };
   },
 });
 
 register({
   path: ['vms', 'delete'],
-  summary: 'Delete a VM permanently',
-  args: [{ name: 'id', required: true, description: 'VM ID' }],
+  summary: 'Delete a VM',
+  args: [{ name: 'id', required: false, description: 'VM name or ID' }],
   flags: {},
   scope: 'vms:delete',
   destructive: true,
-  examples: ['bitqate vms delete vm_abc123 --yes'],
+  confirmInside: true,
+  aliases: ['rm'],
+  examples: ['bitqate vms delete dizzy-puma --yes'],
   async run(ctx) {
-    const resp = await ctx.api().delete(['vms', ctx.args[0]]);
-    const data = {
-      id: ctx.args[0],
-      refunded: resp?.refunded,
-      message: resp?.message,
+    const { id, name } = await resolveVm(ctx);
+    await confirmDestroy(ctx, name);
+    const resp = await ctx.api().delete(['vms', id]);
+    return {
+      data: { id, refunded: resp?.refunded, message: resp?.message },
+      render: (v, ui) => ({ lines: [checkmark(ui, `Deleted ${name}`)] }),
     };
-    return { data, render: (d) => ({ lines: [d.message ?? ''] }) };
   },
 });
 
 register({
   path: ['vms', 'backups', 'list'],
-  summary: 'List backups of a VM',
-  args: [{ name: 'id', required: true, description: 'VM ID' }],
+  summary: 'List backups',
+  args: [{ name: 'id', required: false, description: 'VM name or ID' }],
   flags: {},
   scope: 'vms:read',
-  examples: ['bitqate vms backups list vm_abc123'],
+  aliases: ['ls'],
+  examples: ['bitqate vms backups list dizzy-puma'],
   async run(ctx) {
-    const resp = await ctx.api().get(['vms', ctx.args[0], 'backups']);
+    const { id } = await resolveVm(ctx);
+    const resp = await ctx.api().get(['vms', id, 'backups']);
     const data = resp?.backups ?? [];
     return {
       data,
       render: (rows: any[]) => ({
         table: {
-          head: ['TOKEN', 'NAME', 'SIZE', 'CREATED'],
+          columns: [
+            { title: 'Token' },
+            { title: 'Name' },
+            { title: 'Size', priority: 2 },
+            { title: 'Created', priority: 4 },
+          ],
           rows: rows.map((b) => [
             b.token ?? b.volid ?? '',
             b.name ?? '',
             b.size != null ? String(b.size) : '',
-            b.created_at ?? b.ctime ?? '',
+            relTime(b.created_at ?? b.ctime),
           ]),
+          footer: rows.length
+            ? undefined
+            : 'No backups yet. Create one with `bitqate vms backups create`.',
         },
       }),
     };
@@ -415,79 +656,97 @@ register({
 
 register({
   path: ['vms', 'backups', 'create'],
-  summary: 'Create a VM backup',
-  args: [{ name: 'id', required: true, description: 'VM ID' }],
+  summary: 'Create a backup',
+  args: [{ name: 'id', required: false, description: 'VM name or ID' }],
   flags: {},
   scope: 'vms:write',
-  examples: ['bitqate vms backups create vm_abc123'],
+  aliases: ['new'],
+  examples: ['bitqate vms backups create dizzy-puma'],
   async run(ctx) {
-    const resp = await ctx.api().post(['vms', ctx.args[0], 'backups']);
+    const { id, name } = await resolveVm(ctx);
+    const resp = await ctx.api().post(['vms', id, 'backups']);
     return {
-      data: { id: ctx.args[0], message: resp?.message ?? '' },
-      render: (d) => ({ lines: [d.message] }),
+      data: { id, message: resp?.message ?? '' },
+      render: (v, ui) => ({
+        lines: [checkmark(ui, `Backup started for ${name}`)],
+      }),
     };
   },
 });
 
 register({
   path: ['vms', 'backups', 'restore'],
-  summary: 'Restore a VM backup (overwrites the VM disk)',
+  summary: 'Restore a backup',
   args: [
-    { name: 'id', required: true, description: 'VM ID' },
+    { name: 'id', required: false, description: 'VM name or ID' },
     { name: 'token', required: true, description: 'Backup token' },
   ],
   flags: {},
   scope: 'vms:delete',
   destructive: true,
-  examples: ['bitqate vms backups restore vm_abc123 <token> --yes'],
+  confirmInside: true,
+  examples: ['bitqate vms backups restore dizzy-puma <token> --yes'],
   async run(ctx) {
+    const { id, name } = await resolveVm(ctx);
+    await confirmDestroy(ctx, `${name} backup ${ctx.args[1]}`);
     const resp = await ctx
       .api()
-      .post(['vms', ctx.args[0], 'backups', ctx.args[1], 'restore']);
+      .post(['vms', id, 'backups', ctx.args[1], 'restore']);
     return {
-      data: { id: ctx.args[0], message: resp?.message ?? '' },
-      render: (d) => ({ lines: [d.message] }),
+      data: { id, message: resp?.message ?? '' },
+      render: (v, ui) => ({
+        lines: [checkmark(ui, `Restoring ${name} from backup`)],
+      }),
     };
   },
 });
 
 register({
   path: ['vms', 'backups', 'delete'],
-  summary: 'Delete a VM backup permanently',
+  summary: 'Delete a backup',
   args: [
-    { name: 'id', required: true, description: 'VM ID' },
+    { name: 'id', required: false, description: 'VM name or ID' },
     { name: 'token', required: true, description: 'Backup token' },
   ],
   flags: {},
   scope: 'vms:delete',
   destructive: true,
-  examples: ['bitqate vms backups delete vm_abc123 <token> --yes'],
+  confirmInside: true,
+  examples: ['bitqate vms backups delete dizzy-puma <token> --yes'],
   async run(ctx) {
-    const resp = await ctx
-      .api()
-      .delete(['vms', ctx.args[0], 'backups', ctx.args[1]]);
+    const { id, name } = await resolveVm(ctx);
+    await confirmDestroy(ctx, `${name} backup ${ctx.args[1]}`);
+    const resp = await ctx.api().delete(['vms', id, 'backups', ctx.args[1]]);
     return {
-      data: { id: ctx.args[0], message: resp?.message ?? '' },
-      render: (d) => ({ lines: [d.message] }),
+      data: { id, message: resp?.message ?? '' },
+      render: (v, ui) => ({
+        lines: [checkmark(ui, `Deleted backup of ${name}`)],
+      }),
     };
   },
 });
 
 register({
   path: ['vms', 'networking'],
-  summary: 'Show VM network addresses',
-  args: [{ name: 'id', required: true, description: 'VM ID' }],
+  summary: 'Show network addresses',
+  args: [{ name: 'id', required: false, description: 'VM name or ID' }],
   flags: {},
   scope: 'vms:read',
-  examples: ['bitqate vms networking vm_abc123'],
+  examples: ['bitqate vms networking dizzy-puma'],
   async run(ctx) {
-    const resp = await ctx.api().get(['vms', ctx.args[0], 'networking']);
+    const { id } = await resolveVm(ctx);
+    const resp = await ctx.api().get(['vms', id, 'networking']);
     const data = resp?.ips ?? resp;
     return {
       data,
       render: (rows: any[]) => ({
         table: {
-          head: ['ADDRESS', 'VERSION', 'CIDR', 'RDNS'],
+          columns: [
+            { title: 'Address' },
+            { title: 'Version', priority: 1 },
+            { title: 'CIDR', priority: 2 },
+            { title: 'rDNS', priority: 4 },
+          ],
           rows: (Array.isArray(rows) ? rows : []).map((ip) => [
             ip.address ?? ip.ip_address ?? '',
             String(ip.version ?? ''),
@@ -502,47 +761,56 @@ register({
 
 register({
   path: ['vms', 'rdns'],
-  summary: 'Set the reverse DNS hostname for a VM address',
-  args: [{ name: 'id', required: true, description: 'VM ID' }],
+  summary: 'Set reverse DNS',
+  args: [{ name: 'id', required: false, description: 'VM name or ID' }],
   flags: {
-    address: { type: 'string', required: true, description: 'IP address' },
-    hostname: { type: 'string', required: true, description: 'rDNS hostname' },
+    address: {
+      type: 'string',
+      placeholder: 'ip',
+      required: true,
+      description: 'IP address',
+    },
+    hostname: {
+      type: 'string',
+      placeholder: 'host',
+      required: true,
+      description: 'rDNS hostname',
+    },
   },
   scope: 'vms:write',
   examples: [
-    'bitqate vms rdns vm_abc123 --address 203.0.113.10 --hostname mail.example.com',
+    'bitqate vms rdns dizzy-puma --address 203.0.113.10 --hostname mail.example.com',
   ],
   async run(ctx) {
-    const resp = await ctx
-      .api()
-      .put(['vms', ctx.args[0], 'networking', 'rdns'], {
-        address: ctx.flags.address,
-        rdns: ctx.flags.hostname,
-      });
-    const data = {
-      id: ctx.args[0],
-      rdns: resp?.rdns,
-      dnsSynced: resp?.dnsSynced,
+    const { id, name } = await resolveVm(ctx);
+    const resp = await ctx.api().put(['vms', id, 'networking', 'rdns'], {
+      address: ctx.flags.address,
+      rdns: ctx.flags.hostname,
+    });
+    return {
+      data: { id, rdns: resp?.rdns, dnsSynced: resp?.dnsSynced },
+      render: (v, ui) => ({ lines: [checkmark(ui, `Set rDNS for ${name}`)] }),
     };
-    return { data, render: (d) => ({ lines: kvLines(d) }) };
   },
 });
 
 register({
   path: ['vms', 'stats'],
-  summary: 'Show VM usage statistics',
-  args: [{ name: 'id', required: true, description: 'VM ID' }],
+  summary: 'Show usage statistics',
+  args: [{ name: 'id', required: false, description: 'VM name or ID' }],
   flags: {
     range: {
       type: 'string',
-      description: 'hour, day, week, month or year (default hour)',
+      placeholder: 'range',
+      description: 'hour, day, week, month or year',
     },
-    cf: { type: 'string', description: 'AVERAGE or MAX (default AVERAGE)' },
+    cf: { type: 'string', placeholder: 'cf', description: 'AVERAGE or MAX' },
   },
   scope: 'vms:read',
-  examples: ['bitqate vms stats vm_abc123 --range day'],
+  examples: ['bitqate vms stats dizzy-puma --range day'],
   async run(ctx) {
-    const resp = await ctx.api().get(['vms', ctx.args[0], 'stats'], {
+    const { id } = await resolveVm(ctx);
+    const resp = await ctx.api().get(['vms', id, 'stats'], {
       range: ctx.flags.range,
       cf: ctx.flags.cf,
     });
@@ -551,7 +819,12 @@ register({
       data,
       render: (rows: any[]) => ({
         table: {
-          head: ['TIME', 'CPU %', 'MEM %', 'DISK %'],
+          columns: [
+            { title: 'Time' },
+            { title: 'CPU %' },
+            { title: 'Mem %', priority: 2 },
+            { title: 'Disk %', priority: 3 },
+          ],
           rows: rows.map((s) => [
             s.time ? new Date(s.time).toISOString() : '',
             String(s.cpu ?? ''),
@@ -566,24 +839,79 @@ register({
 
 register({
   path: ['vms', 'wait'],
-  summary: 'Wait for a VM to reach a status',
-  args: [{ name: 'id', required: true, description: 'VM ID' }],
+  summary: 'Wait for a status',
+  args: [{ name: 'id', required: false, description: 'VM name or ID' }],
   flags: {
-    status: { type: 'string', required: true, description: 'Target status' },
-    'wait-timeout': waitFlag['wait-timeout'],
+    status: {
+      type: 'string',
+      placeholder: 'status',
+      required: true,
+      description: 'Target status',
+    },
+    'wait-timeout': {
+      type: 'string',
+      placeholder: 'seconds',
+      description: 'Seconds before giving up',
+    },
   },
   scope: 'vms:read',
-  examples: ['bitqate vms wait vm_abc123 --status running'],
+  examples: ['bitqate vms wait dizzy-puma --status running'],
   async run(ctx) {
+    const resolved = await resolveVm(ctx);
     const target = ctx.flags.status;
     const fail = new Set([...VM_FAIL].filter((s) => s !== target));
     const vm = await waitForVm(
       ctx,
-      ctx.args[0],
+      resolved,
       new Set([target]),
       fail,
-      `status ${target}`,
+      'Waiting for',
     );
-    return { data: vm, render: (d) => ({ lines: kvLines(d) }) };
+    return {
+      data: vm,
+      render: (v) => ({ lines: [`${v.name ?? v.id} is ${v.status}`] }),
+    };
+  },
+});
+
+register({
+  path: ['vms', 'ssh'],
+  summary: 'Connect over SSH',
+  args: [{ name: 'id', required: false, description: 'VM name or ID' }],
+  flags: {
+    user: {
+      type: 'string',
+      placeholder: 'user',
+      description: 'SSH user (default root)',
+    },
+    '--': {
+      type: 'string',
+      multiple: true,
+      placeholder: 'args',
+      description: 'Extra ssh args',
+    },
+  },
+  scope: 'vms:read',
+  examples: [
+    'bitqate vms ssh dizzy-puma',
+    'bitqate vms ssh dizzy-puma --user debian',
+  ],
+  async run(ctx) {
+    return sshInto(ctx, ctx.args[0]);
+  },
+});
+
+register({
+  path: ['vms', 'open'],
+  summary: 'Open a VM in the dashboard',
+  args: [{ name: 'id', required: false, description: 'VM name or ID' }],
+  flags: {},
+  scope: 'vms:read',
+  examples: ['bitqate vms open dizzy-puma'],
+  async run(ctx) {
+    const { id } = await resolveVm(ctx);
+    const url = portalUrl('vm', id);
+    if (!ctx.io.json && ctx.io.interactive) await openUrl(url);
+    return { data: { url }, render: (d) => ({ lines: [`Opening ${d.url}`] }) };
   },
 });
