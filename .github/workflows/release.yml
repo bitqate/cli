@@ -7,6 +7,7 @@ on:
 
 jobs:
   release:
+    needs: npm
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -44,6 +45,9 @@ jobs:
         run: |
           pkg="$(bun -e 'console.log(require("./package.json").version)')"
           [ "v$pkg" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != package.json v$pkg"; exit 1; }
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun test
       - run: bun run build
       - run: npm publish --provenance --access public
         env:
