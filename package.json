@@ -1,0 +1,34 @@
+{
+  "name": "@bitqate/cli",
+  "version": "0.1.0",
+  "description": "Command-line interface for the BitQate public API",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bitqate/cli.git"
+  },
+  "type": "module",
+  "bin": {
+    "bitqate": "dist/bitqate.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --target=node --outfile=dist/bitqate.js --banner='#!/usr/bin/env node'",
+    "build:binaries": "bun build --compile src/index.ts --target=bun-linux-x64 --outfile=dist/bin/bitqate-linux-x64 && bun build --compile src/index.ts --target=bun-linux-arm64 --outfile=dist/bin/bitqate-linux-arm64 && bun build --compile src/index.ts --target=bun-darwin-x64 --outfile=dist/bin/bitqate-darwin-x64 && bun build --compile src/index.ts --target=bun-darwin-arm64 --outfile=dist/bin/bitqate-darwin-arm64 && bun build --compile src/index.ts --target=bun-windows-x64 --outfile=dist/bin/bitqate-windows-x64.exe",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome lint",
+    "format": "biome format --write",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/bun": "latest",
+    "typescript": "~6.0.3"
+  }
+}
