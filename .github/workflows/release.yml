@@ -1,0 +1,50 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun test
+      - run: bun run build
+      - run: bun run build:binaries
+      - name: Checksums
+        working-directory: dist/bin
+        run: sha256sum * > SHA256SUMS
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/bin/* dist/bitqate.js --title "${GITHUB_REF_NAME}" --generate-notes
+
+  npm:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - run: bun install --frozen-lockfile
+      - name: Verify tag matches package.json version
+        run: |
+          pkg="$(bun -e 'console.log(require("./package.json").version)')"
+          [ "v$pkg" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != package.json v$pkg"; exit 1; }
+      - run: bun run build
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
