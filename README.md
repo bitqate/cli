@@ -48,6 +48,19 @@ bitqate vms list
 bitqate servers list
 ```
 
+On a terminal, most commands go further: `bitqate vms list` prints a table
+with coloured status dots and short IDs, `bitqate vms get dizzy-puma` a
+detail view with next-step hints, and `bitqate vms create` a full
+interactive wizard (region, OS, size presets with monthly prices, SSH key
+picker, review and confirm). Everything still works non-interactively —
+every question maps to a flag.
+
+```
+$ bitqate vms stop dizzy-puma --wait
+⠋ Stopping dizzy-puma  stopping · 0:03
+✓ Stopped dizzy-puma
+```
+
 Tokens are stored per profile in `~/.config/bitqate/config.json` (mode 0600).
 Manage them with `auth status`, `auth list`, `auth switch`, `auth logout`.
 `BITQATE_TOKEN` always takes precedence over the stored profile.
@@ -130,10 +143,24 @@ in the dashboard afterwards.
   errors print as `error: <message>` with an optional `hint:` line.
 - Exit codes: 0 ok · 1 server/network · 2 usage or 400/422 · 3 missing/bad
   token or 401 · 4 403 (including missing scope) · 5 404 · 6 409 · 7 429 ·
-  8 402 · 9 wait timeout.
+  8 402 · 9 wait timeout · 130 user cancel (Ctrl-C/Esc in a prompt or wait).
 - `bitqate schema` dumps every command, flag, scope and destructive marker as
   JSON — designed for tool discovery by agents.
-- `-y/--yes` is required for destructive commands when not on a TTY.
+- Aliases work everywhere: `vm`/`srv`/`server` for `vms`/`servers`,
+  `ls`/`show`/`info`/`rm`/`new` for `list`/`get`/`delete`/`create`, and
+  `whoami` for `account`. They appear in help, completion and `schema`.
+- Any VM/server argument accepts a name, a short ID prefix, or a full
+  UUID. Names resolve via the list endpoint (needs the matching `:read`
+  scope); a UUID is used directly with no list call. Ambiguous matches
+  open a picker on a TTY or print the candidates otherwise.
+- On a TTY, `vms create` and `servers create` run interactive wizards
+  (game-server catalog included: `--game paper`). `--dry-run` prints the
+  request body instead of sending it; `--yes` skips the final confirm.
+- `vms ssh <name>` connects over SSH (with `--json` it prints
+  `{host, user, port, host_key_fingerprint}` instead), and `open <name>`
+  (or `vms open` / `servers open`) opens the dashboard in a browser.
+- `-y/--yes` is required for destructive commands when not on a TTY; on a
+  TTY you're asked to type the resource name back.
 - `--dry-run` prints the method, URL and JSON body without sending anything.
 - `-q/--quiet` prints only resource IDs, one per line — easy to pipe.
 - `--verbose` writes `METHOD url -> status (ms)` to stderr; tokens are never

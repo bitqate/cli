@@ -1,107 +1,37 @@
 import { GLOBAL_FLAG_SPECS } from '../core/args';
 import { usageError } from '../core/errors';
-import { commands, findCommand, register, type Command } from '../registry';
+import { commandHelp, groupHelp, rootHelp } from '../ui/help';
+import {
+  commandAliases,
+  commands,
+  findCommand,
+  findGroup,
+  groups,
+  register,
+  subcommandsOf,
+} from '../registry';
 import pkg from '../../package.json';
-
-export function commandUsage(cmd: Command): string {
-  const parts = ['bitqate', ...cmd.path];
-  for (const arg of cmd.args)
-    parts.push(arg.required === false ? `[${arg.name}]` : `<${arg.name}>`);
-  if (Object.keys(cmd.flags).length) parts.push('[flags]');
-  return parts.join(' ');
-}
-
-export function commandHelp(cmd: Command): string {
-  const lines: string[] = [];
-  lines.push(`Usage: ${commandUsage(cmd)}`);
-  lines.push('');
-  lines.push(cmd.description ?? cmd.summary);
-  if (cmd.args.length) {
-    lines.push('', 'Arguments:');
-    for (const a of cmd.args)
-      lines.push(`  ${a.name.padEnd(14)} ${a.description ?? ''}`.trimEnd());
-  }
-  const flagEntries = Object.entries(cmd.flags);
-  const globalEntries = Object.entries(GLOBAL_FLAG_SPECS);
-  lines.push('', 'Flags:');
-  for (const [name, spec] of flagEntries) {
-    const alias = spec.short ? `-${spec.short}, ` : '    ';
-    const mult = spec.multiple ? ' (repeatable)' : '';
-    const req = spec.required ? ' (required)' : '';
-    lines.push(
-      `  ${alias}--${name}${spec.type === 'string' ? ' <value>' : ''}${req}${mult}  ${spec.description}`.trimEnd(),
-    );
-  }
-  lines.push('', 'Global flags:');
-  for (const [name, spec] of globalEntries) {
-    const alias = spec.short ? `-${spec.short}, ` : '    ';
-    lines.push(
-      `  ${alias}--${name}${spec.type === 'string' ? ' <value>' : ''}  ${spec.description}`.trimEnd(),
-    );
-  }
-  if (cmd.scope)
-    lines.push(
-      '',
-      `Required token scope: ${cmd.scope === 'any' ? 'any valid token' : cmd.scope}`,
-    );
-  if (cmd.destructive)
-    lines.push('', 'Destructive: requires --yes outside an interactive TTY.');
-  if (cmd.examples.length) {
-    lines.push('', 'Examples:');
-    for (const e of cmd.examples) lines.push(`  ${e}`);
-  }
-  return lines.join('\n');
-}
-
-export function globalHelp(): string {
-  const lines: string[] = [
-    'bitqate - BitQate command-line interface',
-    '',
-    'Usage: bitqate <command> [args] [flags]',
-    '',
-    'Commands:',
-  ];
-  const sorted = [...commands].sort((a, b) =>
-    a.path.join(' ').localeCompare(b.path.join(' ')),
-  );
-  const width = Math.max(...sorted.map((c) => c.path.join(' ').length));
-  for (const cmd of sorted)
-    lines.push(`  ${cmd.path.join(' ').padEnd(width)}  ${cmd.summary}`);
-  lines.push(
-    '',
-    'Global flags:',
-    ...Object.entries(GLOBAL_FLAG_SPECS).map(([name, spec]) =>
-      `  ${spec.short ? `-${spec.short}, ` : ''}--${name}  ${spec.description}`.trimEnd(),
-    ),
-    '',
-    "Run 'bitqate help <command>' for details on a command.",
-  );
-  return lines.join('\n');
-}
 
 function completionScript(shell: string): string {
   const paths = commands.map((c) => c.path.join(' '));
-  const top = [...new Set(commands.map((c) => c.path[0]))];
+  const top = [
+    ...new Set([
+      ...commands.map((c) => c.path[0]),
+      ...commands
+        .filter((c) => c.path.length === 1)
+        .flatMap((c) => c.aliases ?? []),
+      'whoami',
+      'vm',
+      'server',
+      'srv',
+    ]),
+  ];
   const globals = Object.keys(GLOBAL_FLAG_SPECS).map((f) => `--${f}`);
   if (shell === 'bash') {
-    const cases = paths
-      .map((p) => {
-        const parts = p.split(' ');
-        const depth = parts.length - 1;
-        return `    ${depth}) COMPREPLY=( $(compgen -W "${globals.join(' ')}" -- "$cur") ) ;;`;
-      })
-      .join('\n');
     return `# bash completion for bitqate
 _bitqate() {
   local cur="\${COMP_WORDS[COMP_CWORD]}"
-  if [[ $COMP_CWORD -eq 1 ]]; then
-    COMPREPLY=( $(compgen -W "${top.join(' ')}" -- "$cur") )
-    return
-  fi
-  case $COMP_CWORD in
-${cases}
-    *) COMPREPLY=( $(compgen -W "${globals.join(' ')}" -- "$cur") ) ;;
-  esac
+  COMPREPLY=( $(compgen -W "${[...top, ...paths].join(' ')} ${globals.join(' ')}" -- "$cur") )
 }
 complete -F _bitqate bitqate
 `;
@@ -111,7 +41,7 @@ complete -F _bitqate bitqate
 # zsh completion for bitqate
 _bitqate() {
   local -a cmds
-  cmds=(${paths.map((p) => `'${p}'`).join(' ')})
+  cmds=(${[...top, ...paths, ...globals].map((p) => `'${p}'`).join(' ')})
   _describe 'command' cmds
 }
 _bitqate "$@"
@@ -119,16 +49,8 @@ _bitqate "$@"
   }
   if (shell === 'fish') {
     return (
-      paths.map((p) => {
-        const parts = p.split(' ');
-        const cond = parts
-          .slice(0, -1)
-          .map((s, i) => `__fish_seen_subcommand_from ${s}`);
-        return `complete -c bitqate -f -n "__fish_use_subcommand" -a "${parts[0]}"`;
-      })[0] +
-      '\n' +
-      paths
-        .map((p) => `complete -c bitqate -f -a "${p}" -d "command"`)
+      [...paths, ...top]
+        .map((p) => `complete -c bitqate -f -a "${p}"`)
         .join('\n') +
       '\n' +
       globals.map((g) => `complete -c bitqate -l ${g.slice(2)} -f`).join('\n') +
@@ -146,17 +68,24 @@ register({
   scope: null,
   examples: ['bitqate help', 'bitqate help vms create'],
   async run(ctx) {
+    const theme = ctx.io.theme;
     if (!ctx.args.length)
       return {
-        data: { help: globalHelp() },
+        data: { help: rootHelp(theme) },
         render: (d) => ({ lines: [d.help] }),
       };
     const cmd = findCommand(ctx.args);
-    if (!cmd) throw usageError(`Unknown command '${ctx.args.join(' ')}'`);
-    return {
-      data: { help: commandHelp(cmd), command: cmd.path.join(' ') },
-      render: (d) => ({ lines: [d.help] }),
-    };
+    if (cmd)
+      return {
+        data: { help: commandHelp(cmd, theme), command: cmd.path.join(' ') },
+        render: (d) => ({ lines: [d.help] }),
+      };
+    if (findGroup(ctx.args) || subcommandsOf(ctx.args).length)
+      return {
+        data: { help: groupHelp(ctx.args, theme) },
+        render: (d) => ({ lines: [d.help] }),
+      };
+    throw usageError(`Unknown command '${ctx.args.join(' ')}'`);
   },
 });
 
@@ -170,15 +99,23 @@ register({
   async run() {
     const data = {
       version: pkg.version,
+      groups: groups.map((g) => ({
+        path: g.path,
+        aliases: g.aliases,
+        summary: g.summary,
+      })),
       commands: [...commands]
         .sort((a, b) => a.path.join(' ').localeCompare(b.path.join(' ')))
         .map((c) => ({
           path: c.path,
+          aliases: c.aliases ?? commandAliases(c),
           summary: c.summary,
           args: c.args,
           flags: c.flags,
           scope: c.scope,
           destructive: !!c.destructive,
+          interactive: !!c.interactive,
+          charges: !!c.charges,
           examples: c.examples,
         })),
     };

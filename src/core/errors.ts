@@ -9,7 +9,8 @@ export type ErrorCode =
   | 'conflict'
   | 'rate_limited'
   | 'payment_required'
-  | 'timeout';
+  | 'timeout'
+  | 'cancelled';
 
 export const EXIT_CODES: Record<ErrorCode, number> = {
   server: 1,
@@ -23,6 +24,7 @@ export const EXIT_CODES: Record<ErrorCode, number> = {
   rate_limited: 7,
   payment_required: 8,
   timeout: 9,
+  cancelled: 130,
 };
 
 export class CliError extends Error {

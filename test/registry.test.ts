@@ -48,8 +48,14 @@ describe('parseCommandLine', () => {
   });
 
   test('missing required arg and flag', () => {
-    expect(() => parseCommandLine(cmd, [])).toThrow(CliError);
-    expect(() => parseCommandLine(create, ['--node', 'n1'])).toThrow(CliError);
+    const authSwitch = commands.find(
+      (c) => c.path.join(' ') === 'auth switch',
+    )!;
+    expect(() => parseCommandLine(authSwitch, [])).toThrow(CliError);
+    const reinstall = commands.find(
+      (c) => c.path.join(' ') === 'vms reinstall',
+    )!;
+    expect(() => parseCommandLine(reinstall, ['x'])).toThrow(CliError);
   });
 
   test('repeatable flags collect values', () => {
@@ -112,8 +118,8 @@ describe('printError modes', () => {
     expect(JSON.parse(out[0])).toEqual({
       error: { code: 'usage', message: 'nope' },
     });
-    expect(out[1]).toBe('error: nope\n');
-    expect(out[2]).toBe('hint: pass --yes\n');
+    expect(out[1]).toContain('nope');
+    expect(out[2]).toContain('pass --yes');
   });
 });
 

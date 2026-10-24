@@ -6,10 +6,35 @@ import {
   saveConfig,
 } from '../core/config';
 import { CliError, usageError } from '../core/errors';
-import { kvLines } from '../core/output';
-import { readHidden, readStdin } from '../core/prompt';
+import { readStdin } from '../core/io';
+import { password } from '../ui/prompts';
 import { isApiTokenFormat, validateApiUrl } from '../core/validate';
 import { register } from '../registry';
+
+const SCOPE_ORDER = (s: string) => {
+  if (s === 'account:read') return 0;
+  if (s.startsWith('vms:')) return 1;
+  if (s.startsWith('servers:')) return 2;
+  return 3;
+};
+
+function scopeRows(scopes: string[]): [string, string][] {
+  const sorted = [...scopes].sort(
+    (x, y) => SCOPE_ORDER(x) - SCOPE_ORDER(y) || x.localeCompare(y),
+  );
+  const width = process.stdout.columns ?? 80;
+  const rows: [string, string][] = [];
+  let line = '';
+  for (const s of sorted) {
+    const next = line ? `${line}, ${s}` : s;
+    if (`  Scopes  ${next}`.length > Math.max(40, width) && line) {
+      rows.push(['Scopes', `${line},`]);
+      line = s;
+    } else line = next;
+  }
+  rows.push(['Scopes', line]);
+  return rows.map((r, i) => (i ? ['', r[1]] : r));
+}
 
 function formatExpiry(expiresAt: number | null | undefined): string {
   if (!expiresAt) return 'never';
@@ -23,10 +48,11 @@ register({
   flags: {
     'token-stdin': {
       type: 'boolean',
-      description: 'Read the token from stdin instead of a hidden prompt',
+      description: 'Read the token from stdin instead of a prompt',
     },
   },
   scope: null,
+  interactive: true,
   examples: [
     'bitqate auth login',
     'bitqate auth login --token-stdin < token.txt',
@@ -41,7 +67,14 @@ register({
     if (ctx.flags['token-stdin']) {
       token = (await readStdin()).trim();
     } else {
-      token = (await readHidden('API token: ')).trim();
+      if (!process.stdin.isTTY || !process.stderr.isTTY)
+        throw usageError(
+          'No terminal available; pass the token with --token-stdin instead.',
+        );
+      process.stderr.write(
+        'Create a token at https://portal.bitqate.com/settings?tab=api\nGrant only the scopes you need and set an expiry for automation.\n',
+      );
+      token = (await password({ message: 'API token' }, ctx.io.theme)).trim();
     }
     if (!isApiTokenFormat(token))
       throw usageError(
@@ -54,6 +87,12 @@ register({
     if (!info || info.key_id === undefined)
       throw new CliError('server', 'Unexpected response from /v1/token');
 
+    let username: string | null = null;
+    try {
+      const acct = await client.get(['account']);
+      username = acct?.account?.username ?? null;
+    } catch {}
+
     const config = loadConfig();
     config.profiles[profile] = { api_url: baseUrl, token };
     config.current = profile;
@@ -62,6 +101,7 @@ register({
     const data = {
       profile,
       api_url: baseUrl,
+      username,
       key_id: info.key_id,
       name: info.name,
       scopes: info.scopes,
@@ -69,17 +109,15 @@ register({
     };
     return {
       data,
-      render: (d) => ({
-        lines: [
-          `Saved token to profile '${d.profile}'.`,
-          ...kvLines({
-            key_id: d.key_id,
-            name: d.name,
-            scopes: (d.scopes ?? []).join(', '),
-            expires: formatExpiry(d.expires_at),
-          }),
-        ],
-      }),
+      render: (d, ui) => {
+        const who = d.username ? ` as ${d.username}` : '';
+        const scopeCount = (d.scopes ?? []).length;
+        return {
+          lines: [
+            `${ui.theme.paint('success', ui.theme.glyph('check'))} Logged in${who} · token "${d.name}" · ${scopeCount} scope${scopeCount === 1 ? '' : 's'} · profile ${d.profile}`,
+          ],
+        };
+      },
     };
   },
 });
@@ -103,7 +141,11 @@ register({
     saveConfig(config);
     return {
       data: { profile, removed: true },
-      render: (d) => ({ lines: [`Removed profile '${d.profile}'.`] }),
+      render: (d, ui) => ({
+        lines: [
+          `${ui.theme.paint('success', ui.theme.glyph('check'))} Removed profile '${d.profile}'.`,
+        ],
+      }),
     };
   },
 });
@@ -131,15 +173,17 @@ register({
     return {
       data,
       render: (d) => ({
-        lines: kvLines({
-          source: d.source,
-          profile: d.profile,
-          api_url: d.api_url,
-          key_id: d.key_id,
-          name: d.name,
-          scopes: (d.scopes ?? []).join(', '),
-          expires: formatExpiry(d.expires_at),
-        }),
+        detail: {
+          title: `Token "${d.name ?? ''}"`,
+          fields: [
+            ['Source', d.source],
+            ['Profile', d.profile],
+            ['API', d.api_url],
+            ['Key ID', d.key_id],
+            ...scopeRows(d.scopes ?? []),
+            ['Expires', d.expires_at ? formatExpiry(d.expires_at) : 'never'],
+          ],
+        },
       }),
     };
   },
@@ -162,16 +206,24 @@ register({
     }));
     return {
       data,
-      render: (rows) => ({
-        table: {
-          head: ['PROFILE', 'API URL', 'CURRENT'],
-          rows: rows.map((r: any) => [
-            r.name,
-            r.api_url ?? '',
-            r.current ? '*' : '',
-          ]),
-        },
-      }),
+      render: (rows: any[]) => {
+        if (!rows.length)
+          return { lines: ['No profiles. Run `bitqate auth login`.'] };
+        return {
+          table: {
+            columns: [
+              { title: 'Profile' },
+              { title: 'API URL' },
+              { title: 'Current' },
+            ],
+            rows: rows.map((r) => [
+              r.name,
+              r.api_url ?? '',
+              r.current ? '*' : '',
+            ]),
+          },
+        };
+      },
     };
   },
 });
@@ -191,7 +243,11 @@ register({
     saveConfig(config);
     return {
       data: { current: name },
-      render: (d) => ({ lines: [`Switched to profile '${d.current}'.`] }),
+      render: (d, ui) => ({
+        lines: [
+          `${ui.theme.paint('success', ui.theme.glyph('check'))} Switched to profile '${d.current}'.`,
+        ],
+      }),
     };
   },
 });
