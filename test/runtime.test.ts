@@ -101,7 +101,7 @@ describe('pickRollbackTarget', () => {
 describe('ApiClient.stream', () => {
   test('sends the token and query and returns the open body', async () => {
     let seen = '';
-    let auth: string | null = null;
+    let auth = null as string | null;
     behavior = (req) => {
       seen = new URL(req.url).pathname + new URL(req.url).search;
       auth = req.headers.get('authorization');
