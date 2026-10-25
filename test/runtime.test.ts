@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { ApiClient } from '../src/core/client';
 import { CliError } from '../src/core/errors';
 import {
@@ -9,18 +9,17 @@ import {
 
 const TOKEN = `bqat_${'a'.repeat(16)}_${'A'.repeat(43)}`;
 
-let server: ReturnType<typeof Bun.serve>;
 let behavior: (req: Request) => Response = () => new Response('');
 
-beforeAll(() => {
-  server = Bun.serve({ port: 0, fetch: (req) => behavior(req) });
-});
-afterAll(() => server.stop(true));
+const fakeFetch = (async (input: any, init: any) =>
+  behavior(new Request(input, init))) as unknown as typeof fetch;
 
 function client() {
+  // apiUrl only exists on some versions of ClientOptions.
   return new ApiClient({
-    apiUrl: `http://127.0.0.1:${server.port}`,
     token: TOKEN,
+    fetchImpl: fakeFetch,
+    ...({ apiUrl: 'https://api.bitqate.com' } as any),
   });
 }
 
