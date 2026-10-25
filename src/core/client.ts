@@ -197,4 +197,55 @@ export class ApiClient {
   delete(segments: string[]) {
     return this.request('DELETE', segments);
   }
+
+  // Long-lived GET for NDJSON streams (server logs). No overall timeout:
+  // the caller stops it through `signal`. Errors map like request()'s.
+  async stream(
+    segments: string[],
+    query: Record<string, string | number | undefined> = {},
+    signal?: AbortSignal,
+  ): Promise<Response> {
+    const url = new URL(this.baseUrl + buildApiPath(...segments));
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) url.searchParams.set(key, String(value));
+    }
+    const started = Date.now();
+    let resp: Response;
+    try {
+      resp = await this.fetchImpl(url.toString(), {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          Accept: 'application/x-ndjson',
+          'User-Agent': userAgent(),
+        },
+        redirect: 'manual',
+        signal,
+      });
+    } catch (err) {
+      throw new CliError(
+        'network',
+        `Could not reach the API: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (this.verbose) {
+      process.stderr.write(
+        `GET ${url} -> ${resp.status} (${Date.now() - started}ms)\n`,
+      );
+    }
+    if (!resp.ok || !resp.body) {
+      let message = `Request failed (HTTP ${resp.status})`;
+      try {
+        const data = JSON.parse(await readCappedText(resp, 64 * 1024));
+        if (typeof data?.message === 'string') message = data.message;
+      } catch {}
+      const retryAfter = resp.headers.get('Retry-After');
+      throw statusToError(
+        resp.status,
+        message,
+        retryAfter ? Number(retryAfter) : undefined,
+      );
+    }
+    return resp;
+  }
 }

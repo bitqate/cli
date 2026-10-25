@@ -27,6 +27,7 @@ import './commands/auth';
 import './commands/account';
 import './commands/vms';
 import './commands/servers';
+import './commands/runtime';
 import './commands/prices';
 import './commands/meta';
 import './commands/tools';

@@ -89,9 +89,9 @@ and `bitqate schema` lists all of them for agents).
 | `vms:power` | `vms start/stop/restart` | |
 | `vms:write` | `vms create/resize/rename/auto-renew/renew/rdns`, `vms backups create` | **can charge your balance** |
 | `vms:delete` | `vms delete/reinstall`, `vms backups restore/delete` | **destroys data** |
-| `servers:read` | `servers list/get/install-state`, `servers backups list`, `servers deployments *` | read-only |
+| `servers:read` | `servers list/get/install-state/logs`, `servers backups list`, `servers deployments list/get/logs`, `servers health get`, `servers network get` | read-only |
 | `servers:power` | `servers start/stop/restart` | |
-| `servers:write` | `servers create/renew/auto-renew/rename/resize/ports/startup/deploy`, `servers backups create` | **can charge your balance** |
+| `servers:write` | `servers create/renew/auto-renew/rename/resize/ports/startup/deploy`, `servers backups create`, `servers deployments rollback`, `servers health set/clear`, `servers network enable/disable` | **can charge your balance** |
 | `servers:delete` | `servers delete/reinstall`, `servers backups restore/delete` | **destroys data** |
 | any valid token | `prices`, `vms nodes`, `vms os`, `servers regions`, `auth status` | catalog endpoints |
 
@@ -136,7 +136,24 @@ servers  backups list|create <id>
 servers  backups restore|delete <id> <backupId>             # destructive
 servers  deploy <id> [--follow]
 servers  deployments list <id> | get|logs <id> <deployId>
+servers  deployments rollback <id> [deployId] [--follow]
+servers  logs <id> [-f] [--tail <n>] [--since 10m|<date>] [-t]
+servers  health get <id> | clear <id>
+servers  health set <id> [--type http|tcp] [--path /healthz] [--interval <s>]
+                [--timeout <s>] [--failures <n>] [--grace <s>] [--no-restart]
+servers  network get <id> | enable <id> [--hostname <name>] | disable <id>
 ```
+
+`servers logs` prints the container's own output; `-f` keeps streaming
+across restarts and redeploys until Ctrl-C (NDJSON `{"t","line"}` with
+`--json`). `deployments rollback` rebuilds the exact commit of an earlier
+successful deployment (default: the one before the live version).
+`health set` makes git deploys wait for the check before switching traffic,
+restores the previous version when a deploy never passes it, and restarts a
+running server that keeps failing (at most 3 times an hour).
+`network enable` puts the server on its workspace's private network: servers
+on the same node reach each other at `<hostname>.internal`, from the
+server's next restart.
 
 `--cpus` accepts fractions (`1.5` → 150 CPU units on servers, `1.5` cores on
 VMs). `servers create --git` creates the server only; connect the repository
