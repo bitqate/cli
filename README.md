@@ -187,25 +187,6 @@ in the dashboard afterwards.
 `{"version":1,"current":"default","profiles":{"default":{"api_url":"...","token":"bqat_..."}}}`.
 API URL precedence: `--api-url` > `BITQATE_API_URL` > profile > `https://api.bitqate.com`.
 
-## Security notes
-
-- Tokens are only sent over HTTPS (HTTP is allowed solely for localhost) and
-  are never printed, logged, or forwarded to redirects (`redirect: manual`).
-- A stored profile token is bound to the API origin it was logged in with.
-  Pointing `--api-url` or `BITQATE_API_URL` at a different origin with a
-  profile token fails closed (exit 3); use `BITQATE_TOKEN` or a dedicated
-  profile for other endpoints.
-- There is no `--token` flag so secrets stay out of argv, shell history and
-  `ps`; use stdin or the hidden prompt.
-- All request paths are built from validated, percent-encoded segments under
-  `/v1/`. Traversal like `../admin` is a usage error, not a request.
-- Non-GET requests are never retried automatically, so a flaky network cannot
-  double-charge a create or renew. GETs retry 429 (bounded) and once on
-  network errors.
-- Server-provided strings are stripped of control characters before printing
-  to a terminal.
-- Config files are written atomically with 0600 permissions.
-
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE). The license does not grant rights to
