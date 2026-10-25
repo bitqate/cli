@@ -123,7 +123,7 @@ export function errorHint(err: CliError): string | null {
     return 'Top up at https://portal.bitqate.com/billing';
   if (err.code === 'rate_limited')
     return `Try again in ${err.retryAfter ?? 30}s`;
-  if (err.code === 'network') return 'Check your connection or --api-url';
+  if (err.code === 'network') return 'Check your connection';
   return null;
 }
 

@@ -17,7 +17,7 @@ import { statusText } from '../ui/theme';
 import { positiveInt, validateSshPublicKey } from '../core/validate';
 import { register, type CommandResult, type RunContext } from '../registry';
 import { vmWizard } from '../wizards/vm';
-import { sshInto } from './tools';
+import { sshInto, vmBusy } from './tools';
 
 const NAME_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
 
@@ -155,32 +155,38 @@ register({
     const data = vm;
     return {
       data,
-      render: (v: any, ui) => ({
-        detail: {
-          title: `${v.name ?? ''}  ${statusText(ui.theme, v.status ?? '')}`,
-          id: v.id,
-          fields: [
-            ['Region', v.region?.name ?? v.pve_node_id],
-            ['OS', v.os_name ?? v.operating_system_id],
-            [
-              'Size',
-              `${v.resources?.cpu_cores ?? 0} vCPU · ${memory(v.resources?.memory_mb ?? 0)} RAM · ${v.resources?.disk_gb ?? 0} GB disk`,
+      render: (v: any, ui) => {
+        const hints: [string, string][] = [];
+        if (!vmBusy(v.status))
+          hints.push([
+            `bitqate vms ssh ${v.name ?? v.id}`,
+            'connect over SSH',
+          ]);
+        hints.push([`bitqate open ${v.name ?? v.id}`, 'open in the dashboard']);
+        return {
+          detail: {
+            title: `${v.name ?? ''}  ${statusText(ui.theme, v.status ?? '')}`,
+            id: v.id,
+            fields: [
+              ['Region', v.region?.name ?? v.pve_node_id],
+              ['OS', v.os_name ?? v.operating_system_id],
+              [
+                'Size',
+                `${v.resources?.cpu_cores ?? 0} vCPU · ${memory(v.resources?.memory_mb ?? 0)} RAM · ${v.resources?.disk_gb ?? 0} GB disk`,
+              ],
+              ['IPv4', v.ipv4],
+              ['IPv6', v.ipv6],
+              ['Host key', v.ssh?.host_key_fingerprint],
+              ['Created', relTime(v.created_at)],
+              [
+                'Renews',
+                `${relTime(v.expires_at)} · auto-renew ${v.auto_renew ? 'on' : 'off'}`,
+              ],
             ],
-            ['IPv4', v.ipv4],
-            ['IPv6', v.ipv6],
-            ['Host key', v.ssh?.host_key_fingerprint],
-            ['Created', relTime(v.created_at)],
-            [
-              'Renews',
-              `${relTime(v.expires_at)} · auto-renew ${v.auto_renew ? 'on' : 'off'}`,
-            ],
-          ],
-          hints: [
-            [`bitqate vms ssh ${v.name ?? v.id}`, 'connect over SSH'],
-            [`bitqate open ${v.name ?? v.id}`, 'open in the dashboard'],
-          ],
-        },
-      }),
+            hints,
+          },
+        };
+      },
     };
   },
 });
@@ -278,7 +284,7 @@ register({
     },
     'auto-renew': { type: 'boolean', description: 'Enable auto-renewal' },
     'ipv6-only': { type: 'boolean', description: 'No public IPv4 address' },
-    wait: { type: 'boolean', description: 'Wait for provisioning' },
+    wait: { type: 'boolean', description: 'Wait until it is ready' },
     'wait-timeout': {
       type: 'string',
       placeholder: 'seconds',
@@ -302,6 +308,7 @@ register({
       !ctx.flags['disk-gb'];
     const useWizard = ctx.io.interactive && !ctx.io.json && missingRequired;
 
+    let body: Record<string, unknown>;
     if (!useWizard) {
       const node = await resolveOption(
         ctx,
@@ -318,7 +325,7 @@ register({
         'OS',
         (o) => (o.node_ids ?? []).includes(node),
       );
-      const body: Record<string, unknown> = {
+      body = {
         pve_node_id: node,
         operating_system_id: os,
         memory: positiveInt(ctx.flags['memory-mb'], 'memory-mb'),
@@ -347,52 +354,54 @@ register({
         }
         body.ssh_public_key = validateSshPublicKey(content);
       }
-      const resp = await ctx.api().post(['vms'], body);
-      const vm = resp?.vm ?? {};
-      if (ctx.flags.wait && vm.id) {
-        const final = await waitForVm(
-          ctx,
-          { id: vm.id, name: vm.name ?? vm.id },
-          VM_OK,
-          VM_FAIL,
-          'Provisioning',
-        );
-        return {
-          data: final,
-          render: (v, ui) => ({
-            lines: [checkmark(ui, `${v.name ?? v.id} is ${v.status}`)],
-          }),
-        };
-      }
-      return ok(vm, vm.id ? `Created ${vm.name ?? vm.id}` : 'Created');
+    } else {
+      body = (await vmWizard(ctx)).body;
     }
 
-    const { body } = await vmWizard(ctx);
-
     const t0 = Date.now();
-    const created = await task('Creating VM', ctx.io.theme, async () => {
-      const resp = await ctx.api().post(['vms'], body);
-      return resp?.vm;
-    });
-    if (!created?.id)
-      throw new CliError('server', 'Unexpected create response');
+    const resp = await task('Creating VM', ctx.io.theme, () =>
+      ctx.api().post(['vms'], body),
+    );
+    const vm = resp?.vm;
+    if (!vm?.id) throw new CliError('server', 'Unexpected create response');
+    const named = typeof body.name === 'string' && body.name ? body.name : null;
+    const ref = named ?? shortId(vm.id);
+    const label = named ?? `VM ${shortId(vm.id)}`;
 
-    const waited = await waitForVm(
+    if (!ctx.flags.wait) {
+      return {
+        data: vm,
+        render: (v, ui) => ({
+          lines: [
+            checkmark(
+              ui,
+              `${label} is now being created${vm.ip_address ? ` · ${vm.ip_address}` : ''}`,
+            ),
+            `  ${ui.theme.paint('muted', "You can't SSH in or manage it until it's done.")}`,
+            `  ${ui.theme.paint('muted', `Check progress with bitqate vms get ${ref}`)}`,
+          ],
+        }),
+      };
+    }
+
+    const ready = await waitForVm(
       ctx,
-      { id: created.id, name: created.name ?? created.id },
+      { id: vm.id, name: ref },
       VM_OK,
       VM_FAIL,
       'Provisioning',
     );
+    const final = ready?.name ?? ref;
     const secs = (Date.now() - t0) / 1000;
-    const finish = `${created.name ?? created.id} is running (${elapsedLong(secs)})`;
-    const ipv4Text = waited.ipv4 ? ` · ${waited.ipv4}` : '';
     return {
-      data: waited,
+      data: ready,
       render: (v, ui) => ({
         lines: [
-          checkmark(ui, `${finish}${ipv4Text}`),
-          `  ${ui.theme.paint('muted', `bitqate vms ssh ${created.name ?? created.id}`)}`,
+          checkmark(
+            ui,
+            `${final} is running (${elapsedLong(secs)})${ready?.ipv4 ? ` · ${ready.ipv4}` : ''}`,
+          ),
+          `  ${ui.theme.paint('muted', `bitqate vms ssh ${final}`)}`,
         ],
       }),
     };

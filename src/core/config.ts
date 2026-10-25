@@ -12,11 +12,8 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { CliError } from './errors';
-import { DEFAULT_API_URL } from './validate';
 
 export interface ProfileEntry {
-  api_url?: string;
   token?: string;
 }
 
@@ -101,15 +98,13 @@ export function saveConfig(config: CliConfig): void {
 
 export interface ResolvedAuth {
   token: string | null;
-  apiUrl: string;
-  boundUrl: string | null;
   profile: string;
   source: 'env' | 'profile' | 'none';
 }
 
 export function resolveAuth(
   config: CliConfig,
-  opts: { profile?: string; apiUrl?: string },
+  opts: { profile?: string },
 ): ResolvedAuth {
   const profile =
     opts.profile ??
@@ -120,30 +115,5 @@ export function resolveAuth(
   const envToken = process.env.BITQATE_TOKEN;
   const token = envToken ?? entry?.token ?? null;
   const source = envToken ? 'env' : entry?.token ? 'profile' : 'none';
-  const urlOverride = opts.apiUrl ?? process.env.BITQATE_API_URL;
-  const apiUrl = urlOverride ?? entry?.api_url ?? DEFAULT_API_URL;
-  const boundUrl =
-    source === 'profile' ? (entry?.api_url ?? DEFAULT_API_URL) : null;
-  return { token, apiUrl, boundUrl, profile, source };
-}
-
-export function assertTokenOrigin(auth: ResolvedAuth): void {
-  if (auth.source !== 'profile' || !auth.boundUrl) return;
-  let bound: string | null = null;
-  let actual: string | null = null;
-  try {
-    bound = new URL(auth.boundUrl).origin;
-    actual = new URL(auth.apiUrl).origin;
-  } catch {}
-  if (!bound || !actual)
-    throw new CliError(
-      'unauthenticated',
-      `The API URL for profile '${auth.profile}' is invalid. Run \`bitqate auth login\` again.`,
-    );
-  if (bound !== actual) {
-    throw new CliError(
-      'unauthenticated',
-      `The stored token for profile '${auth.profile}' is bound to ${bound}. Log in a profile for ${actual} or set BITQATE_TOKEN.`,
-    );
-  }
+  return { token, profile, source };
 }

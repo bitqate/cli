@@ -4,7 +4,6 @@ import {
   cpusToUnits,
   isApiTokenFormat,
   parseEnvPairs,
-  validateApiUrl,
   validateSshPublicKey,
 } from '../src/core/validate';
 import { CliError } from '../src/core/errors';
@@ -38,34 +37,6 @@ describe('isApiTokenFormat', () => {
     expect(isApiTokenFormat(`bqa_${'a'.repeat(16)}_${'A'.repeat(43)}`)).toBe(
       false,
     );
-  });
-});
-
-describe('validateApiUrl', () => {
-  test('accepts https and loopback http only', () => {
-    expect(validateApiUrl('https://api.bitqate.com')).toBe(
-      'https://api.bitqate.com',
-    );
-    expect(validateApiUrl('http://127.0.0.1:3000')).toBe(
-      'http://127.0.0.1:3000',
-    );
-    expect(validateApiUrl('http://localhost:8080')).toBe(
-      'http://localhost:8080',
-    );
-    expect(validateApiUrl('http://[::1]:8080')).toBe('http://[::1]:8080');
-  });
-
-  test('rejects http off loopback and URL extras', () => {
-    for (const bad of [
-      'http://example.com',
-      'https://user:pw@api.bitqate.com',
-      'https://api.bitqate.com/v1',
-      'https://api.bitqate.com/?x=1',
-      'https://api.bitqate.com/#f',
-      'not a url',
-    ]) {
-      expect(() => validateApiUrl(bad)).toThrow(CliError);
-    }
   });
 });
 

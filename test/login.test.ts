@@ -1,39 +1,37 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const TOKEN = `bqat_${'a'.repeat(16)}_${'A'.repeat(43)}`;
+const UUID = 'f1de2391-1c98-4497-afc1-ca20e310ad19';
 const CLI = join(import.meta.dir, '..', 'src', 'index.ts');
 
 let server: ReturnType<typeof Bun.serve>;
+let trap = '';
+let trapHits = 0;
 
 beforeAll(() => {
   server = Bun.serve({
     port: 0,
-    fetch(req) {
-      if (new URL(req.url).pathname === '/v1/token') {
-        return Response.json({
-          success: true,
-          token: {
-            key_id: 'a'.repeat(16),
-            name: 't',
-            scopes: ['account:read'],
-            created_at: 1,
-            last_used_at: null,
-            expires_at: null,
-          },
-        });
-      }
-      return Response.json(
-        { success: false, message: 'not found' },
-        { status: 404 },
-      );
+    fetch() {
+      trapHits++;
+      return Response.json({ success: true });
     },
   });
+  trap = `http://127.0.0.1:${server.port}`;
 });
 
 afterAll(() => server.stop(true));
+
+function cleanEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v === undefined || k.startsWith('BITQATE_')) continue;
+    env[k] = v;
+  }
+  return env;
+}
 
 async function runCli(
   args: string[],
@@ -44,7 +42,7 @@ async function runCli(
     stdin: stdin !== undefined ? new Blob([stdin]) : 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
-    env: { ...process.env, ...env },
+    env: { ...cleanEnv(), ...env },
   });
   const [code, out, err] = await Promise.all([
     proc.exited,
@@ -54,35 +52,69 @@ async function runCli(
   return { code, out, err };
 }
 
-describe('auth login', () => {
-  test('re-points a profile at a new API URL instead of tripping the binding', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'bq-login-'));
-    const env = { BITQATE_CONFIG_DIR: dir };
-    const base = `http://127.0.0.1:${server.port}`;
+function freshDir(): string {
+  return mkdtempSync(join(tmpdir(), 'bq-login-'));
+}
 
-    const first = await runCli(
-      ['auth', 'login', '--api-url', base, '--token-stdin'],
-      env,
+describe('the API URL is never user-overridable', () => {
+  test('auth login --api-url is rejected and stores nothing', async () => {
+    trapHits = 0;
+    const dir = freshDir();
+    const r = await runCli(
+      ['auth', 'login', '--api-url', trap, '--token-stdin'],
+      { BITQATE_CONFIG_DIR: dir },
       TOKEN,
     );
-    expect(first.code).toBe(0);
+    expect(r.code).toBe(2);
+    expect(r.err).toContain("Unknown flag '--api-url'");
+    expect(trapHits).toBe(0);
+    expect(existsSync(join(dir, 'config.json'))).toBe(false);
+  });
 
-    const second = await runCli(
-      [
-        'auth',
-        'login',
-        '--api-url',
-        `http://localhost:${server.port}`,
-        '--token-stdin',
-      ],
-      env,
-      TOKEN,
-    );
-    expect(second.code).toBe(0);
+  test('a leading --api-url is rejected before any request', async () => {
+    trapHits = 0;
+    const r = await runCli(['--api-url', trap, 'auth', 'status'], {
+      BITQATE_CONFIG_DIR: freshDir(),
+      BITQATE_TOKEN: TOKEN,
+    });
+    expect(r.code).toBe(2);
+    expect(r.err).toContain("Unknown flag '--api-url'");
+    expect(trapHits).toBe(0);
+  });
 
-    const cfg = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'));
-    expect(cfg.profiles.default.api_url).toBe(
-      `http://localhost:${server.port}`,
+  test('BITQATE_API_URL is ignored and never receives the token', async () => {
+    trapHits = 0;
+    const r = await runCli(
+      ['vms', 'delete', UUID, '--yes', '--dry-run'],
+      {
+        BITQATE_CONFIG_DIR: freshDir(),
+        BITQATE_API_URL: trap,
+        BITQATE_TOKEN: TOKEN,
+      },
     );
+    expect(r.code).toBe(0);
+    expect(r.out).toBe(`DELETE https://api.bitqate.com/v1/vms/${UUID}\n`);
+    expect(trapHits).toBe(0);
+  });
+
+  test('a profile api_url is ignored and never receives the token', async () => {
+    trapHits = 0;
+    const dir = freshDir();
+    writeFileSync(
+      join(dir, 'config.json'),
+      JSON.stringify({
+        version: 1,
+        current: 'default',
+        profiles: { default: { api_url: trap, token: TOKEN } },
+      }),
+      { mode: 0o600 },
+    );
+    const r = await runCli(
+      ['vms', 'delete', UUID, '--yes', '--dry-run'],
+      { BITQATE_CONFIG_DIR: dir },
+    );
+    expect(r.code).toBe(0);
+    expect(r.out).toBe(`DELETE https://api.bitqate.com/v1/vms/${UUID}\n`);
+    expect(trapHits).toBe(0);
   });
 });

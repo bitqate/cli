@@ -1,6 +1,8 @@
 import { CliError, statusToError } from './errors';
-import { buildApiPath, validateApiUrl } from './validate';
+import { buildApiPath } from './validate';
 import pkg from '../../package.json';
+
+export const API_URL = 'https://api.bitqate.com';
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
@@ -9,7 +11,6 @@ const MAX_NETWORK_RETRIES = 1;
 const RETRY_AFTER_CAP_S = 30;
 
 export interface ClientOptions {
-  apiUrl: string;
   token: string;
   verbose?: boolean;
   dryRun?: boolean;
@@ -57,7 +58,6 @@ async function readCappedText(resp: Response, limit: number): Promise<string> {
 }
 
 export class ApiClient {
-  readonly baseUrl: string;
   private readonly token: string;
   private readonly verbose: boolean;
   private readonly dryRun: boolean;
@@ -65,7 +65,6 @@ export class ApiClient {
   private readonly timeoutMs: number;
 
   constructor(opts: ClientOptions) {
-    this.baseUrl = validateApiUrl(opts.apiUrl);
     this.token = opts.token;
     this.verbose = !!opts.verbose;
     this.dryRun = !!opts.dryRun;
@@ -82,7 +81,7 @@ export class ApiClient {
     } = {},
   ): Promise<any> {
     const path = buildApiPath(...segments);
-    const url = new URL(this.baseUrl + path);
+    const url = new URL(API_URL + path);
     if (opts.query) {
       for (const [key, value] of Object.entries(opts.query)) {
         if (value !== undefined) url.searchParams.set(key, String(value));
@@ -205,7 +204,7 @@ export class ApiClient {
     query: Record<string, string | number | undefined> = {},
     signal?: AbortSignal,
   ): Promise<Response> {
-    const url = new URL(this.baseUrl + buildApiPath(...segments));
+    const url = new URL(API_URL + buildApiPath(...segments));
     for (const [key, value] of Object.entries(query)) {
       if (value !== undefined) url.searchParams.set(key, String(value));
     }

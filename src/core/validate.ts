@@ -1,6 +1,5 @@
 import { usageError } from './errors';
 
-export const DEFAULT_API_URL = 'https://api.bitqate.com';
 export const API_TOKEN_REGEX = /^bqat_[0-9a-f]{16}_[A-Za-z0-9_-]{43}$/;
 
 const CONTROL_CHARS = new RegExp('[\\x00-\\x1f\\x7f-\\x9f]');
@@ -28,29 +27,6 @@ export function encodePathSegment(segment: string): string {
 
 export function buildApiPath(...segments: string[]): string {
   return `/v1/${segments.map(encodePathSegment).join('/')}`;
-}
-
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
-
-export function validateApiUrl(raw: string): string {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw usageError(`Invalid API URL '${raw}'`);
-  }
-  if (url.username || url.password)
-    throw usageError('API URL must not contain credentials');
-  if (url.search || url.hash)
-    throw usageError('API URL must not contain a query or fragment');
-  if (url.pathname !== '/' && url.pathname !== '')
-    throw usageError('API URL must not contain a path');
-  if (url.protocol === 'https:') return url.origin;
-  if (url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname))
-    return url.origin;
-  throw usageError(
-    'API URL must use https (http is only allowed for localhost)',
-  );
 }
 
 export function parseEnvPairs(pairs: string[]): Record<string, string> {

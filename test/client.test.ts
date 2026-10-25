@@ -1,41 +1,30 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { ApiClient, DryRunRequest } from '../src/core/client';
+import { describe, expect, test } from 'bun:test';
+import { API_URL, ApiClient, DryRunRequest } from '../src/core/client';
 import { CliError } from '../src/core/errors';
 
 const TOKEN = `bqat_${'a'.repeat(16)}_${'A'.repeat(43)}`;
 
-let server: ReturnType<typeof Bun.serve>;
 let hits: { url: string; auth: string | null; method: string; body: string }[] =
   [];
 let behavior: (req: Request) => Response = () =>
   Response.json({ success: true, ok: true });
 
-beforeAll(() => {
-  server = Bun.serve({
-    port: 0,
-    async fetch(req) {
-      const body = await req.text();
-      hits.push({
-        url: new URL(req.url).pathname + new URL(req.url).search,
-        auth: req.headers.get('authorization'),
-        method: req.method,
-        body,
-      });
-      return behavior(req);
-    },
+const fakeFetch = (async (input: any, init: any) => {
+  const req = new Request(input, init);
+  hits.push({
+    url: req.url,
+    auth: req.headers.get('authorization'),
+    method: req.method,
+    body: await req.text(),
   });
-});
+  return behavior(req);
+}) as unknown as typeof fetch;
 
-afterAll(() => server.stop(true));
-
-function client(
-  opts: Partial<Parameters<typeof ApiClient.prototype.request>[2]> &
-    Record<string, unknown> = {},
-) {
+function client(opts: Record<string, unknown> = {}) {
   hits = [];
   return new ApiClient({
-    apiUrl: `http://127.0.0.1:${server.port}`,
     token: TOKEN,
+    fetchImpl: fakeFetch,
     ...(opts as any),
   });
 }
@@ -46,7 +35,7 @@ describe('ApiClient', () => {
     const c = client();
     const out = await c.get(['vms']);
     expect(out.vms).toEqual([]);
-    expect(hits[0].url).toBe('/v1/vms');
+    expect(hits[0].url).toBe('https://api.bitqate.com/v1/vms');
     expect(hits[0].auth).toBe(`Bearer ${TOKEN}`);
   });
 
@@ -54,9 +43,17 @@ describe('ApiClient', () => {
     behavior = () => Response.json({ success: true });
     const c = client();
     await c.get(['vms', 'a b?d']);
-    expect(hits[0].url).toBe('/v1/vms/a%20b%3Fd');
+    expect(hits[0].url).toBe('https://api.bitqate.com/v1/vms/a%20b%3Fd');
     await expect(c.get(['vms', '..'])).rejects.toMatchObject({ code: 'usage' });
     expect(hits).toHaveLength(1);
+  });
+
+  test('always targets the BitQate API, ignoring any apiUrl option', async () => {
+    expect(API_URL).toBe('https://api.bitqate.com');
+    behavior = () => Response.json({ success: true });
+    const c = client({ apiUrl: 'https://evil.example' });
+    await c.get(['vms']);
+    expect(new URL(hits[0].url).origin).toBe('https://api.bitqate.com');
   });
 
   test('refuses redirects so the token is never forwarded', async () => {
@@ -166,7 +163,7 @@ describe('ApiClient', () => {
     const err = await c.post(['vms'], { a: 1 }).catch((e) => e);
     expect(err).toBeInstanceOf(DryRunRequest);
     expect(err.method).toBe('POST');
-    expect(err.url).toContain('/v1/vms');
+    expect(err.url).toBe('https://api.bitqate.com/v1/vms');
     expect(err.body).toEqual({ a: 1 });
     expect(hits).toHaveLength(0);
   });

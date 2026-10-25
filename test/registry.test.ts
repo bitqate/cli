@@ -88,14 +88,18 @@ describe('splitGlobalFlags', () => {
     ]);
   });
   test('value-taking globals work in both forms', () => {
-    const a = splitGlobalFlags([
-      '--profile',
-      'ci',
-      '--api-url=http://x',
-      'account',
-    ]);
-    expect(a.flagArgv).toEqual(['--profile', 'ci', '--api-url=http://x']);
+    const a = splitGlobalFlags(['--profile', 'ci', 'account']);
+    expect(a.flagArgv).toEqual(['--profile', 'ci']);
     expect(a.restArgv).toEqual(['account']);
+    const b = splitGlobalFlags(['--profile=ci', 'account']);
+    expect(b.flagArgv).toEqual(['--profile=ci']);
+    expect(b.restArgv).toEqual(['account']);
+  });
+  test('--api-url is not a global flag', () => {
+    expect(
+      splitGlobalFlags(['--api-url', 'https://evil.example', 'account'])
+        .restArgv,
+    ).toEqual(['--api-url', 'https://evil.example', 'account']);
   });
   test('command flags and their values pass through untouched', () => {
     const a = splitGlobalFlags(['vms', 'create', '--node', 'pve-1']);
@@ -178,6 +182,24 @@ describe('main', () => {
       }
       expect(out).toBe(`bitqate ${pkg.version}\n`);
     }
+  });
+
+  test('rejects --api-url in any position', async () => {
+    await expect(
+      main(['--api-url', 'https://evil.example', 'vms', 'list']),
+    ).rejects.toMatchObject({
+      code: 'usage',
+      message: "Unknown flag '--api-url'",
+    });
+    await expect(
+      main(['--api-url=https://evil.example', 'vms', 'list']),
+    ).rejects.toMatchObject({
+      code: 'usage',
+      message: "Unknown flag '--api-url'",
+    });
+    await expect(
+      main(['vms', 'list', '--api-url', 'https://evil.example']),
+    ).rejects.toThrow("Unknown flag '--api-url'");
   });
 });
 

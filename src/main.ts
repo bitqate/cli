@@ -5,7 +5,7 @@ import {
   suggest,
 } from './core/args';
 import { ApiClient, DryRunRequest } from './core/client';
-import { assertTokenOrigin, loadConfig, resolveAuth } from './core/config';
+import { loadConfig, resolveAuth } from './core/config';
 import { CliError, usageError } from './core/errors';
 import {
   errorHint,
@@ -83,11 +83,7 @@ async function rootScreen(io: {
       );
     } else {
       try {
-        assertTokenOrigin(auth);
-        const client = new ApiClient({
-          apiUrl: auth.apiUrl,
-          token: auth.token,
-        });
+        const client = new ApiClient({ token: auth.token });
         const grab = <T>(p: Promise<T>) =>
           Promise.race<T | null>([
             p,
@@ -157,6 +153,8 @@ export async function main(argv: string[]): Promise<number> {
       process.stdout.write(`bitqate ${pkg.version}\n`);
       return 0;
     }
+    const stray = restArgv.find((t) => t.startsWith('-'));
+    if (stray) throw usageError(`Unknown flag '${stray.split('=')[0]}'`);
     return rootScreen(ioFlags);
   }
 
@@ -188,10 +186,7 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   const config = loadConfig();
-  const auth = resolveAuth(config, {
-    profile: flags.profile,
-    apiUrl: flags['api-url'],
-  });
+  const auth = resolveAuth(config, { profile: flags.profile });
 
   const io = {
     json: ioFlags.json,
@@ -215,9 +210,7 @@ export async function main(argv: string[]): Promise<number> {
           'unauthenticated',
           'The configured token is malformed. Expected bqat_<key_id>_<secret>.',
         );
-      assertTokenOrigin(auth);
       built = new ApiClient({
-        apiUrl: auth.apiUrl,
         token: auth.token,
         verbose: io.verbose,
         dryRun: !!flags['dry-run'],

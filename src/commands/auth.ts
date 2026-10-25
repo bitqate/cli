@@ -1,14 +1,13 @@
-import { ApiClient } from '../core/client';
+import { API_URL, ApiClient } from '../core/client';
 import {
   DEFAULT_PROFILE,
   loadConfig,
-  resolveAuth,
   saveConfig,
 } from '../core/config';
 import { CliError, usageError } from '../core/errors';
 import { readStdin } from '../core/io';
 import { password } from '../ui/prompts';
-import { isApiTokenFormat, validateApiUrl } from '../core/validate';
+import { isApiTokenFormat } from '../core/validate';
 import { register } from '../registry';
 
 const SCOPE_ORDER = (s: string) => {
@@ -56,12 +55,10 @@ register({
   examples: [
     'bitqate auth login',
     'bitqate auth login --token-stdin < token.txt',
-    'bitqate auth login --profile ci --api-url http://127.0.0.1:3000 --token-stdin',
+    'bitqate auth login --profile ci --token-stdin < token.txt',
   ],
   async run(ctx) {
     const profile = ctx.flags.profile ?? ctx.auth.profile ?? DEFAULT_PROFILE;
-    const apiUrl = ctx.flags['api-url'] ?? ctx.auth.apiUrl;
-    const baseUrl = validateApiUrl(apiUrl);
 
     let token: string;
     if (ctx.flags['token-stdin']) {
@@ -81,7 +78,7 @@ register({
         'Malformed token: expected the format bqat_<key_id>_<secret>.',
       );
 
-    const client = new ApiClient({ apiUrl: baseUrl, token });
+    const client = new ApiClient({ token });
     const resp = await client.get(['token']);
     const info = resp?.token;
     if (!info || info.key_id === undefined)
@@ -94,13 +91,12 @@ register({
     } catch {}
 
     const config = loadConfig();
-    config.profiles[profile] = { api_url: baseUrl, token };
+    config.profiles[profile] = { token };
     config.current = profile;
     saveConfig(config);
 
     const data = {
       profile,
-      api_url: baseUrl,
       username,
       key_id: info.key_id,
       name: info.name,
@@ -163,7 +159,7 @@ register({
     const data = {
       source: ctx.auth.source,
       profile: ctx.auth.profile,
-      api_url: ctx.auth.apiUrl,
+      api_url: API_URL,
       key_id: info.key_id,
       name: info.name,
       scopes: info.scopes ?? [],
@@ -201,7 +197,6 @@ register({
     const names = Object.keys(config.profiles);
     const data = names.map((name) => ({
       name,
-      api_url: config.profiles[name].api_url ?? null,
       current: name === config.current,
     }));
     return {
@@ -211,16 +206,8 @@ register({
           return { lines: ['No profiles. Run `bitqate auth login`.'] };
         return {
           table: {
-            columns: [
-              { title: 'Profile' },
-              { title: 'API URL' },
-              { title: 'Current' },
-            ],
-            rows: rows.map((r) => [
-              r.name,
-              r.api_url ?? '',
-              r.current ? '*' : '',
-            ]),
+            columns: [{ title: 'Profile' }, { title: 'Current' }],
+            rows: rows.map((r) => [r.name, r.current ? '*' : '']),
           },
         };
       },

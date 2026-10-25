@@ -65,6 +65,15 @@ register({
   },
 });
 
+const VM_BUSY = new Map([
+  ['creating', 'is still being created'],
+  ['reinstalling', 'is being reinstalled'],
+]);
+
+export function vmBusy(status: unknown): string | null {
+  return VM_BUSY.get(String(status)) ?? null;
+}
+
 export async function sshInto(
   ctx: {
     api: () => any;
@@ -83,6 +92,15 @@ export async function sshInto(
   const resp = await ctx.api().get(['vms', id]);
   const vm = resp?.vm;
   if (!vm) throw new CliError('not_found', `No VM matches '${ref}'`);
+  const busy = vmBusy(vm.status);
+  if (busy) {
+    const who = ref ?? name;
+    throw new CliError(
+      'conflict',
+      `${who} ${busy}. You can SSH in once it's ready.`,
+      { hint: `Check progress with bitqate vms get ${who}` },
+    );
+  }
   const host =
     vm.ipv4 ??
     vm.networking?.ips?.find((i: any) => i.version === 4)?.address ??

@@ -343,6 +343,9 @@ register({
       !sources.length;
     const useWizard = ctx.io.interactive && !ctx.io.json && missingRequired;
 
+    let body: Record<string, unknown>;
+    let mode: string;
+    let name: string;
     if (!useWizard) {
       if (sources.length !== 1)
         throw usageError(
@@ -355,7 +358,7 @@ register({
         ['id', 'name', 'location'],
         'region',
       );
-      const body: Record<string, unknown> = {
+      body = {
         name: ctx.flags.name,
         daemonId: region,
         ram: positiveInt(ctx.flags['memory-mb'], 'memory-mb'),
@@ -407,51 +410,50 @@ register({
           ['id', 'name'],
           'workspace',
         );
+      mode = body.mode as string;
+      name = ctx.flags.name;
+    } else {
+      ({ body, mode, name } = await serverWizard(ctx));
+    }
 
-      const resp = await ctx.api().post(['servers'], body);
-      const id = resp?.id;
-      const data: Record<string, unknown> = { id, mode: body.mode };
-      if (body.mode === 'git')
-        data.hint =
-          'Connect the git repository in the dashboard; repo connection is not exposed to API keys.';
-      if (ctx.flags.wait && id && body.mode === 'egg')
-        await waitForInstall(ctx, { id, name: ctx.flags.name });
+    const t0 = Date.now();
+    const resp = await task('Creating server', ctx.io.theme, () =>
+      ctx.api().post(['servers'], body),
+    );
+    const id = resp?.id;
+    if (!id) throw new CliError('server', 'Unexpected create response');
+    const ref = /\s/.test(name) ? `"${name}"` : name;
+    const data: Record<string, unknown> = { id, name, mode };
+    if (mode === 'git')
+      data.hint =
+        'Connect the git repository in the dashboard; repo connection is not exposed to API keys.';
+
+    if (ctx.flags.wait && mode === 'egg') {
+      await waitForInstall(ctx, { id, name });
+      const secs = (Date.now() - t0) / 1000;
       return {
         data,
         render: (d, ui) => ({
           lines: [
-            checkmark(
-              ui,
-              `Created ${ctx.flags.name}${d.id ? ` (${d.id})` : ''}`,
-            ),
-            ...(d.hint ? [`  ${d.hint}`] : []),
+            checkmark(ui, `${name} is installed (${elapsedLong(secs)})`),
           ],
         }),
       };
     }
 
-    const { body, mode, name } = await serverWizard(ctx);
-
-    const t0 = Date.now();
-    const resp = await task('Creating server', ctx.io.theme, async () =>
-      ctx.api().post(['servers'], body),
-    );
-    const id = resp?.id;
-    if (!id) throw new CliError('server', 'Unexpected create response');
-
-    if (mode === 'egg') await waitForInstall(ctx, { id, name });
-    const secs = (Date.now() - t0) / 1000;
     return {
-      data: { id, name, mode },
+      data,
       render: (d, ui) => ({
         lines: [
-          checkmark(
-            ui,
-            `${name} is ${mode === 'egg' ? 'online' : 'created'} (${elapsedLong(secs)})`,
-          ),
-          ...(mode === 'git'
-            ? ['  Connect the git repository in the dashboard to deploy.']
+          mode === 'egg'
+            ? checkmark(ui, `${name} is now being installed`)
+            : checkmark(ui, `Created ${name}`),
+          ...(mode === 'egg'
+            ? [
+                `  ${ui.theme.paint('muted', `Check progress with bitqate servers install-state ${ref}`)}`,
+              ]
             : []),
+          ...(d.hint ? [`  ${ui.theme.paint('muted', d.hint)}`] : []),
         ],
       }),
     };

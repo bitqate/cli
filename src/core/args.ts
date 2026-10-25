@@ -5,7 +5,6 @@ import { usageError } from './errors';
 export interface GlobalFlags {
   json: boolean;
   profile?: string;
-  apiUrl?: string;
   yes: boolean;
   quiet: boolean;
   noColor: boolean;
@@ -20,7 +19,6 @@ export const GLOBAL_FLAG_SPECS: Record<
 > = {
   json: { type: 'boolean', description: 'Print machine-readable JSON' },
   profile: { type: 'string', description: 'Config profile to use' },
-  'api-url': { type: 'string', description: 'Override the API base URL' },
   yes: { type: 'boolean', short: 'y', description: 'Skip confirmations' },
   quiet: {
     type: 'boolean',
@@ -70,7 +68,7 @@ export function suggest(name: string, choices: string[]): string | null {
   return bestScore <= 3 ? best : null;
 }
 
-const GLOBAL_STRING_FLAGS = new Set(['profile', 'api-url']);
+const GLOBAL_STRING_FLAGS = new Set(['profile']);
 const GLOBAL_SHORT_FLAGS = new Set(['-y', '-q', '-h']);
 
 export function splitGlobalFlags(argv: string[]): {

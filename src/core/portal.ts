@@ -1,19 +1,12 @@
 import { spawn } from 'node:child_process';
 import { usageError } from './errors';
-import { validateApiUrl } from './validate';
 
 const PORTAL_URL = 'https://portal.bitqate.com';
 const SAFE_URL = /^https?:\/\/[A-Za-z0-9.:/\[\]-]+$/;
 
-export function portalOrigin(): string {
-  const override = process.env.BITQATE_PORTAL_URL;
-  return override ? validateApiUrl(override) : PORTAL_URL;
-}
-
 export function portalUrl(kind: 'vm' | 'server' | 'home', id?: string): string {
-  const base = portalOrigin();
-  if (kind === 'home') return base;
-  return `${base}/${kind}/${id}`;
+  if (kind === 'home') return PORTAL_URL;
+  return `${PORTAL_URL}/${kind}/${id}`;
 }
 
 export function launcher(): { cmd: string; args: (url: string) => string[] } {

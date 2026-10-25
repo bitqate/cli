@@ -3,7 +3,6 @@ import { mkdtempSync, chmodSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  assertTokenOrigin,
   configPath,
   loadConfig,
   resolveAuth,
@@ -19,12 +18,10 @@ beforeEach(() => {
     BITQATE_CONFIG_DIR: process.env.BITQATE_CONFIG_DIR,
     BITQATE_TOKEN: process.env.BITQATE_TOKEN,
     BITQATE_PROFILE: process.env.BITQATE_PROFILE,
-    BITQATE_API_URL: process.env.BITQATE_API_URL,
   };
   process.env.BITQATE_CONFIG_DIR = dir;
   delete process.env.BITQATE_TOKEN;
   delete process.env.BITQATE_PROFILE;
-  delete process.env.BITQATE_API_URL;
 });
 
 afterEach(() => {
@@ -39,7 +36,7 @@ describe('config', () => {
     saveConfig({
       version: 1,
       current: 'default',
-      profiles: { default: { api_url: 'https://x', token: 'tok' } },
+      profiles: { default: { token: 'tok' } },
     });
     if (process.platform !== 'win32') {
       expect(statSync(dir).mode & 0o777).toBe(0o700);
@@ -62,12 +59,12 @@ describe('config', () => {
 });
 
 describe('resolveAuth precedence', () => {
-  test('env token wins over profile; flag > env > profile > default for URL', () => {
+  test('env token wins over profile; profile precedence', () => {
     const config = {
       version: 1 as const,
       current: 'p1',
       profiles: {
-        p1: { api_url: 'https://profile.example', token: 'profile-tok' },
+        p1: { token: 'profile-tok' },
       },
     };
     expect(resolveAuth(config, {}).token).toBe('profile-tok');
@@ -78,66 +75,25 @@ describe('resolveAuth precedence', () => {
     expect(resolveAuth(config, {}).source).toBe('env');
     delete process.env.BITQATE_TOKEN;
 
-    expect(resolveAuth(config, {}).apiUrl).toBe('https://profile.example');
-    process.env.BITQATE_API_URL = 'https://env.example';
-    process.env.BITQATE_TOKEN = 'env-tok';
-    expect(resolveAuth(config, {}).apiUrl).toBe('https://env.example');
-    expect(resolveAuth(config, { apiUrl: 'https://flag.example' }).apiUrl).toBe(
-      'https://flag.example',
-    );
-    delete process.env.BITQATE_API_URL;
-    delete process.env.BITQATE_TOKEN;
-
     process.env.BITQATE_PROFILE = 'p1';
     expect(resolveAuth(config, {}).profile).toBe('p1');
     expect(resolveAuth(config, { profile: 'other' }).profile).toBe('other');
   });
 
-  test('resolveAuth reports the bound origin without throwing', () => {
+  test('ignores BITQATE_API_URL and profile api_url', () => {
+    process.env.BITQATE_API_URL = 'https://evil.example';
     const config = {
       version: 1 as const,
       current: 'p1',
       profiles: {
-        p1: { api_url: 'https://api.bitqate.com', token: 'profile-tok' },
+        p1: { api_url: 'https://evil.example', token: 'profile-tok' } as any,
       },
     };
-    const auth = resolveAuth(config, { apiUrl: 'https://evil.example' });
-    expect(auth.apiUrl).toBe('https://evil.example');
-    expect(auth.boundUrl).toBe('https://api.bitqate.com');
-    expect(auth.source).toBe('profile');
-
-    process.env.BITQATE_TOKEN = 'env-tok';
-    const envAuth = resolveAuth(config, { apiUrl: 'https://evil.example' });
-    expect(envAuth.token).toBe('env-tok');
-    expect(envAuth.boundUrl).toBeNull();
-    delete process.env.BITQATE_TOKEN;
-  });
-
-  test('assertTokenOrigin only fires for profile tokens on a new origin', () => {
-    const config = {
-      version: 1 as const,
-      current: 'p1',
-      profiles: {
-        p1: { api_url: 'https://api.bitqate.com', token: 'profile-tok' },
-      },
-    };
-    expect(() =>
-      assertTokenOrigin(
-        resolveAuth(config, { apiUrl: 'https://evil.example' }),
-      ),
-    ).toThrowError(/bound to https:\/\/api\.bitqate\.com/);
-    expect(() =>
-      assertTokenOrigin(
-        resolveAuth(config, { apiUrl: 'https://api.bitqate.com' }),
-      ),
-    ).not.toThrow();
-
-    process.env.BITQATE_TOKEN = 'env-tok';
-    expect(() =>
-      assertTokenOrigin(
-        resolveAuth(config, { apiUrl: 'https://evil.example' }),
-      ),
-    ).not.toThrow();
-    delete process.env.BITQATE_TOKEN;
+    expect(resolveAuth(config, {})).toEqual({
+      token: 'profile-tok',
+      profile: 'p1',
+      source: 'profile',
+    });
+    delete process.env.BITQATE_API_URL;
   });
 });

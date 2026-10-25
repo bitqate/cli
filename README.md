@@ -163,8 +163,8 @@ in the dashboard afterwards.
 
 - `BITQATE_TOKEN` supplies the token without touching the config file.
 - Global flags work in any position: `bitqate --json vms list` and
-  `bitqate vms list --json` are equivalent, as are `--profile ci` and
-  `--api-url=…` before the command.
+  `bitqate vms list --json` are equivalent, and `--profile ci` works
+  before or after the command.
 - `--json` (or `BITQATE_OUTPUT=json`) prints the API payload without
   `success`: lists as arrays, objects as objects, actions as
   `{ id?, message, ... }`. Errors go to stderr as
@@ -185,6 +185,8 @@ in the dashboard afterwards.
 - On a TTY, `vms create` and `servers create` run interactive wizards
   (game-server catalog included: `--game paper`). `--dry-run` prints the
   request body instead of sending it; `--yes` skips the final confirm.
+  Both return as soon as the API accepts the request; pass `--wait` to
+  block until a VM is running or a game server has finished installing.
 - `vms ssh <name>` connects over SSH (with `--json` it prints
   `{host, user, port, host_key_fingerprint}` instead), and `open <name>`
   (or `vms open` / `servers open`) opens the dashboard in a browser.
@@ -201,8 +203,9 @@ in the dashboard afterwards.
 
 `config.json` lives in `BITQATE_CONFIG_DIR` > `$XDG_CONFIG_HOME/bitqate` >
 `~/.config/bitqate` and looks like
-`{"version":1,"current":"default","profiles":{"default":{"api_url":"...","token":"bqat_..."}}}`.
-API URL precedence: `--api-url` > `BITQATE_API_URL` > profile > `https://api.bitqate.com`.
+`{"version":1,"current":"default","profiles":{"default":{"token":"bqat_..."}}}`.
+The CLI only talks to `https://api.bitqate.com`. No flag, environment variable or
+config key changes that, so a token is never sent anywhere else.
 
 ## License
 

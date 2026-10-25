@@ -86,15 +86,15 @@ describe('resolveResource', () => {
 });
 
 describe('portal', () => {
-  test('portalUrl builds vm/server/home URLs and validates override', () => {
+  test('portalUrl builds vm/server/home URLs and ignores BITQATE_PORTAL_URL', () => {
     expect(portalUrl('vm', 'abc')).toBe('https://portal.bitqate.com/vm/abc');
     expect(portalUrl('server', 'abc')).toBe(
       'https://portal.bitqate.com/server/abc',
     );
     expect(portalUrl('home')).toBe('https://portal.bitqate.com');
     const saved = process.env.BITQATE_PORTAL_URL;
-    process.env.BITQATE_PORTAL_URL = 'http://evil.example';
-    expect(() => portalUrl('home')).toThrow(CliError);
+    process.env.BITQATE_PORTAL_URL = 'https://evil.example';
+    expect(portalUrl('home')).toBe('https://portal.bitqate.com');
     if (saved === undefined) delete process.env.BITQATE_PORTAL_URL;
     else process.env.BITQATE_PORTAL_URL = saved;
   });

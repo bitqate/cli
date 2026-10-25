@@ -49,7 +49,6 @@ const GLOBAL_FLAGS_LIST: [string, string][] = [
   ['--yes, -y', 'Skip confirmations'],
   ['--quiet, -q', 'Print only resource IDs'],
   ['--profile <name>', 'Config profile to use'],
-  ['--api-url <url>', 'Override the API base URL'],
   ['--dry-run', 'Print the request without sending it'],
   ['--verbose', 'Log requests to stderr'],
   ['--no-color', 'Disable colored output'],
