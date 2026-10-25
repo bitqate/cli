@@ -152,7 +152,7 @@ export async function main(argv: string[]): Promise<number> {
   };
 
   if (!leading.length) {
-    if (restArgv.includes('version') || flagArgv.includes('--version')) {
+    if (restArgv.includes('version') || restArgv.includes('--version')) {
       process.stdout.write(`bitqate ${pkg.version}\n`);
       return 0;
     }

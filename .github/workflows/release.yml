@@ -6,11 +6,11 @@ on:
       - 'v*'
 
 jobs:
-  release:
+  build:
     needs: npm
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -23,9 +23,46 @@ jobs:
       - name: Checksums
         working-directory: dist/bin
         run: sha256sum * > SHA256SUMS
+      - run: bun run build:wheels
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: |
+            dist/bitqate.js
+            dist/bin
+            dist/wheels
+          if-no-files-found: error
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/wheels
+          skip-existing: true
+
+  release:
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
       - name: GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: gh release create "${GITHUB_REF_NAME}" dist/bin/* dist/bitqate.js --title "${GITHUB_REF_NAME}" --generate-notes
 
   npm:
@@ -38,7 +75,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           registry-url: https://registry.npmjs.org
       - run: bun install --frozen-lockfile
       - name: Verify tag matches package.json version
@@ -50,5 +87,3 @@ jobs:
       - run: bun test
       - run: bun run build
       - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

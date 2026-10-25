@@ -10,6 +10,18 @@ tokens instead of your account session.
 npm i -g @bitqate/cli
 ```
 
+Or with [uv](https://docs.astral.sh/uv/), no Node required. `uvx` runs it
+without installing, `uv tool install` puts it on your PATH:
+
+```sh
+uvx bitqate --help
+uv tool install bitqate
+```
+
+`pipx install bitqate` and `pip install bitqate` work too. The PyPI wheels
+wrap the standalone binaries below and cover Linux x64/arm64 (glibc), macOS
+(Intel and Apple silicon) and Windows x64.
+
 Standalone binaries for Linux, macOS and Windows are attached to each release
 alongside `SHA256SUMS`. Verify a download with:
 
