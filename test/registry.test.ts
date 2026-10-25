@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { commands } from '../src/registry';
 import {
   destructiveGate,
@@ -9,6 +9,8 @@ import {
 import { CliError } from '../src/core/errors';
 import { sanitize, printJson, printQuiet } from '../src/core/output';
 import { pollUntil } from '../src/core/poll';
+import { main } from '../src/main';
+import pkg from '../package.json';
 import '../src/commands/auth';
 import '../src/commands/account';
 import '../src/commands/vms';
@@ -158,6 +160,24 @@ describe('output', () => {
     expect(out[0]).toBe(JSON.stringify({ a: 1 }, null, 2) + '\n');
     expect(out[1]).toBe('x1\n');
     expect(out[2]).toBe('x2\n');
+  });
+});
+
+describe('main', () => {
+  test('--version prints the version, with or without global flags', async () => {
+    for (const argv of [['--version'], ['version'], ['--json', '--version']]) {
+      const write = spyOn(process.stdout, 'write').mockImplementation(
+        () => true,
+      );
+      let out = '';
+      try {
+        expect(await main(argv)).toBe(0);
+        out = write.mock.calls.map(([s]) => String(s)).join('');
+      } finally {
+        write.mockRestore();
+      }
+      expect(out).toBe(`bitqate ${pkg.version}\n`);
+    }
   });
 });
 

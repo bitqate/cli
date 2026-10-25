@@ -10,6 +10,18 @@ tokens instead of your account session.
 npm i -g @bitqate/cli
 ```
 
+Or with [uv](https://docs.astral.sh/uv/), no Node required. `uvx` runs it
+without installing, `uv tool install` puts it on your PATH:
+
+```sh
+uvx bitqate --help
+uv tool install bitqate
+```
+
+`pipx install bitqate` and `pip install bitqate` work too. The PyPI wheels
+wrap the standalone binaries below and cover Linux x64/arm64 (glibc), macOS
+(Intel and Apple silicon) and Windows x64.
+
 Standalone binaries for Linux, macOS and Windows are attached to each release
 alongside `SHA256SUMS`. Verify a download with:
 
@@ -174,25 +186,6 @@ in the dashboard afterwards.
 `~/.config/bitqate` and looks like
 `{"version":1,"current":"default","profiles":{"default":{"api_url":"...","token":"bqat_..."}}}`.
 API URL precedence: `--api-url` > `BITQATE_API_URL` > profile > `https://api.bitqate.com`.
-
-## Security notes
-
-- Tokens are only sent over HTTPS (HTTP is allowed solely for localhost) and
-  are never printed, logged, or forwarded to redirects (`redirect: manual`).
-- A stored profile token is bound to the API origin it was logged in with.
-  Pointing `--api-url` or `BITQATE_API_URL` at a different origin with a
-  profile token fails closed (exit 3); use `BITQATE_TOKEN` or a dedicated
-  profile for other endpoints.
-- There is no `--token` flag so secrets stay out of argv, shell history and
-  `ps`; use stdin or the hidden prompt.
-- All request paths are built from validated, percent-encoded segments under
-  `/v1/`. Traversal like `../admin` is a usage error, not a request.
-- Non-GET requests are never retried automatically, so a flaky network cannot
-  double-charge a create or renew. GETs retry 429 (bounded) and once on
-  network errors.
-- Server-provided strings are stripped of control characters before printing
-  to a terminal.
-- Config files are written atomically with 0600 permissions.
 
 ## License
 
