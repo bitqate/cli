@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { CliError, usageError } from '../core/errors';
 import { priceMap, serverMonthly } from '../core/pricing';
 import { findGame, GAMES, type GameEntry } from '../data/games';
@@ -54,8 +54,13 @@ export async function serverWizard(ctx: RunContext): Promise<any> {
   let eggUrl = ctx.flags['egg-url'];
   let game: GameEntry | undefined;
   let dockerfile: string | undefined;
+  let dir: string | undefined;
   let sourceLabel = '';
-  if (ctx.flags.image) {
+  if (ctx.flags.dir) {
+    mode = 'git';
+    dir = String(ctx.flags.dir);
+    sourceLabel = dir;
+  } else if (ctx.flags.image) {
     mode = 'image';
     sourceLabel = ctx.flags.image;
   } else if (ctx.flags['egg-url']) {
@@ -90,13 +95,21 @@ export async function serverWizard(ctx: RunContext): Promise<any> {
             value: 'git',
             hint: 'connect it in the dashboard afterwards',
           },
+          {
+            label: 'Local directory',
+            value: 'dir',
+            hint: 'upload code from this machine',
+          },
         ],
       },
       theme,
     );
     if (mode === 'image') {
       image = await text(
-        { message: 'Image reference', validate: (v) => (v ? null : 'Required') },
+        {
+          message: 'Image reference',
+          validate: (v) => (v ? null : 'Required'),
+        },
         theme,
       );
       sourceLabel = image;
@@ -113,6 +126,23 @@ export async function serverWizard(ctx: RunContext): Promise<any> {
         theme,
       );
       sourceLabel = game!.name;
+    } else if (mode === 'dir') {
+      dir = await text(
+        {
+          message: 'Directory',
+          default: '.',
+          validate: (v) => {
+            try {
+              return statSync(v).isDirectory() ? null : 'Not a directory';
+            } catch {
+              return 'No such directory';
+            }
+          },
+        },
+        theme,
+      );
+      sourceLabel = dir!;
+      mode = 'git';
     } else if (mode === 'dockerfile') {
       const path = await text(
         {
@@ -254,7 +284,9 @@ export async function serverWizard(ctx: RunContext): Promise<any> {
         message: 'Name',
         default: slug,
         validate: (v) =>
-          NAME_RE.test(v) ? null : 'Letters, digits, spaces, dots, _ and - only',
+          NAME_RE.test(v)
+            ? null
+            : 'Letters, digits, spaces, dots, _ and - only',
       },
       theme,
     );
@@ -313,5 +345,5 @@ export async function serverWizard(ctx: RunContext): Promise<any> {
   if (Object.keys(variables).length) body.variables = variables;
   if (ctx.flags.startup) body.startup = ctx.flags.startup;
   if (teamId) body.teamId = teamId;
-  return { body, mode, name };
+  return { body, mode, name, dir };
 }

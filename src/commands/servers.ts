@@ -21,6 +21,14 @@ import { statusText } from '../ui/theme';
 import { cpusToUnits, parseEnvPairs, positiveInt } from '../core/validate';
 import { register, type RunContext } from '../registry';
 import { serverWizard } from '../wizards/server';
+import { followDeployment } from './deploy-follow';
+import {
+  collectSourceFiles,
+  gitInfo,
+  packSource,
+} from '../core/source-archive';
+import { statSync } from 'node:fs';
+import path from 'node:path';
 
 const NAME_RE = /^[A-Za-z0-9 ._-]+$/;
 
@@ -286,9 +294,15 @@ register({
     dockerfile: {
       type: 'string',
       placeholder: 'path',
-      description: 'Path to a Dockerfile (max 64 KB)',
+      description:
+        'Path to a Dockerfile (max 64 KB); with --dir, a path inside it',
     },
     git: { type: 'boolean', description: 'Build from a connected git repo' },
+    dir: {
+      type: 'string',
+      placeholder: 'path',
+      description: 'Upload and deploy a local directory',
+    },
     env: {
       type: 'string',
       placeholder: 'KEY=VALUE',
@@ -305,7 +319,10 @@ register({
       placeholder: 'workspace',
       description: 'Workspace name or ID',
     },
-    wait: { type: 'boolean', description: 'Wait for installation' },
+    wait: {
+      type: 'boolean',
+      description: 'Wait for installation, or for the first deploy with --dir',
+    },
     'wait-timeout': {
       type: 'string',
       placeholder: 'seconds',
@@ -326,12 +343,13 @@ register({
       ctx.flags.image,
       ctx.flags['egg-url'],
       ctx.flags.game,
-      ctx.flags.dockerfile,
+      ctx.flags.dockerfile && !ctx.flags.dir ? ctx.flags.dockerfile : undefined,
       ctx.flags.git,
+      ctx.flags.dir,
     ].filter((v) => v !== undefined && v !== false);
     if (sources.length > 1)
       throw usageError(
-        'Pass only one of --image, --egg-url, --game, --dockerfile or --git',
+        'Pass only one of --image, --egg-url, --game, --dockerfile, --git or --dir',
       );
 
     const missingRequired =
@@ -346,10 +364,11 @@ register({
     let body: Record<string, unknown>;
     let mode: string;
     let name: string;
+    let wizardDir: string | undefined;
     if (!useWizard) {
       if (sources.length !== 1)
         throw usageError(
-          'Pass exactly one of --image, --egg-url, --game, --dockerfile or --git',
+          'Pass exactly one of --image, --egg-url, --game, --dockerfile, --git or --dir',
         );
       const region = await resolveOption(
         ctx,
@@ -382,7 +401,7 @@ register({
         body.image = g.image;
         body.startup = g.startup;
         body.variables = { ...g.variables };
-      } else if (ctx.flags.dockerfile) {
+      } else if (ctx.flags.dockerfile && !ctx.flags.dir) {
         body.mode = 'dockerfile';
         let content: string;
         try {
@@ -413,8 +432,13 @@ register({
       mode = body.mode as string;
       name = ctx.flags.name;
     } else {
-      ({ body, mode, name } = await serverWizard(ctx));
+      const w = await serverWizard(ctx);
+      ({ body, mode, name } = w);
+      wizardDir = w.dir;
     }
+
+    const dir = ctx.flags.dir ?? wizardDir;
+    const pkg = dir ? await packageDir(ctx, String(dir)) : null;
 
     const t0 = Date.now();
     const resp = await task('Creating server', ctx.io.theme, () =>
@@ -423,10 +447,68 @@ register({
     const id = resp?.id;
     if (!id) throw new CliError('server', 'Unexpected create response');
     const ref = /\s/.test(name) ? `"${name}"` : name;
+
+    if (pkg) {
+      let up: any;
+      try {
+        up = await uploadPackage(ctx, id, pkg);
+      } catch (e) {
+        throw new CliError(
+          'server',
+          `Created ${name}, but the upload failed: ${e instanceof Error ? e.message : e}. Retry with: bitqate servers deploy ${ref} --dir ${dir}`,
+        );
+      }
+      const packed = pkg;
+      if (ctx.flags.wait && up?.deploymentId) {
+        const dep = await followDeployment(
+          ctx,
+          { id, name },
+          up.deploymentId,
+          waitTimeoutMs(ctx),
+        );
+        if (dep.status === 'failed')
+          throw new CliError('server', 'Deployment failed');
+        const secs = (Date.now() - t0) / 1000;
+        return {
+          data: {
+            id,
+            name,
+            mode,
+            deploymentId: up.deploymentId,
+            status: dep.status,
+          },
+          render: (_d, ui) => ({
+            lines: [
+              checkmark(ui, `${name} is deployed (${elapsedLong(secs)})`),
+            ],
+          }),
+        };
+      }
+      return {
+        data: {
+          id,
+          name,
+          mode,
+          deploymentId: up?.deploymentId,
+          status: up?.status,
+        },
+        render: (_d, ui) => ({
+          lines: [
+            checkmark(
+              ui,
+              `Created ${name} and uploaded ${packed.files} files (${bytes(packed.data.length)})`,
+            ),
+            ui.theme.paint(
+              'muted',
+              `Follow with: bitqate servers deployments logs ${ref} ${up?.deploymentId}`,
+            ),
+          ],
+        }),
+      };
+    }
     const data: Record<string, unknown> = { id, name, mode };
-    if (mode === 'git')
-      data.hint =
-        'Connect the git repository in the dashboard; repo connection is not exposed to API keys.';
+    if (mode === 'git' && !ctx.flags.dir)
+      data.hint = `Connect the git repository in the dashboard, or upload code with: bitqate servers deploy ${ref} --dir .`;
 
     if (ctx.flags.wait && mode === 'egg') {
       await waitForInstall(ctx, { id, name });
@@ -434,9 +516,7 @@ register({
       return {
         data,
         render: (d, ui) => ({
-          lines: [
-            checkmark(ui, `${name} is installed (${elapsedLong(secs)})`),
-          ],
+          lines: [checkmark(ui, `${name} is installed (${elapsedLong(secs)})`)],
         }),
       };
     }
@@ -907,9 +987,25 @@ register({
 
 register({
   path: ['servers', 'deploy'],
-  summary: 'Deploy from git',
+  summary: 'Deploy from git or a local directory',
   args: [{ name: 'id', required: false, description: 'Server name or ID' }],
   flags: {
+    dir: {
+      type: 'string',
+      placeholder: 'path',
+      description: 'Upload and deploy a local directory',
+    },
+    dockerfile: {
+      type: 'string',
+      placeholder: 'path',
+      description: 'Dockerfile to use with --dir (default: Dockerfile)',
+    },
+    message: {
+      type: 'string',
+      short: 'm',
+      placeholder: 'text',
+      description: 'Deployment message (only with --dir)',
+    },
     follow: {
       type: 'boolean',
       description: 'Stream deployment logs to the end',
@@ -922,9 +1018,81 @@ register({
   },
   scope: 'servers:write',
   charges: true,
-  examples: ['bitqate servers deploy api --follow'],
+  examples: [
+    'bitqate servers deploy api --follow',
+    'bitqate servers deploy api --dir . --follow',
+  ],
   async run(ctx) {
+    if (!ctx.flags.dir && (ctx.flags.dockerfile || ctx.flags.message))
+      throw usageError('--dockerfile and --message require --dir');
     const { id, name } = await resolveSrv(ctx);
+
+    if (ctx.flags.dir) {
+      const dir = String(ctx.flags.dir);
+      let st;
+      try {
+        st = statSync(dir);
+      } catch {
+        throw usageError(`No such directory: ${dir}`);
+      }
+      if (!st.isDirectory()) throw usageError(`Not a directory: ${dir}`);
+
+      const pkg = await packageDir(ctx, dir);
+      const resp = await uploadPackage(ctx, id, pkg);
+      const packed = pkg;
+      const dockerfilePath = pkg.dockerfile;
+      const data = packed.data;
+      const deploymentId = resp?.deploymentId;
+      const d = {
+        id,
+        deploymentId,
+        status: resp?.status,
+        files: packed.files,
+        bytes: packed.bytes,
+        compressedBytes: data.length,
+      };
+      if (ctx.flags.follow && deploymentId) {
+        const dep = await followDeployment(
+          ctx,
+          { id, name },
+          deploymentId,
+          waitTimeoutMs(ctx),
+        );
+        if (dep.status === 'failed')
+          throw new CliError('server', 'Deployment failed');
+        return {
+          data: { ...d, status: dep.status },
+          render: (_v, ui) => ({
+            lines: [checkmark(ui, `Deployment ${dep.status} for ${name}`)],
+          }),
+        };
+      }
+      const ref = /\s/.test(name) ? `"${name}"` : name;
+      return {
+        data: d,
+        render: (_v, ui) => ({
+          lines: [
+            checkmark(
+              ui,
+              `Uploaded ${packed.files} files (${bytes(data.length)}) · deployment ${shortId(deploymentId ?? '')} building for ${name}`,
+            ),
+            ui.theme.paint(
+              'muted',
+              `Follow with: bitqate servers deployments logs ${ref} ${deploymentId}`,
+            ),
+            ...(resp?.gitBranch
+              ? [
+                  ui.theme.paint(
+                    'muted',
+                    `${name} also deploys from GitHub (${resp.gitBranch}); the next push replaces this upload.`,
+                  ),
+                ]
+              : []),
+          ],
+        }),
+      };
+    }
+
     const resp = await ctx.api().post(['servers', id, 'deploy'], {});
     const deploymentId = resp?.deploymentId;
     if (!ctx.flags.follow || !deploymentId) {
@@ -941,25 +1109,11 @@ register({
         }),
       };
     }
-    let printed = 0;
-    const dep = await waitPoll(
-      { name, kind: 'servers' },
-      async () => {
-        const logs = await ctx
-          .api()
-          .get(['servers', id, 'deployments', deploymentId, 'logs']);
-        const lines: string[] = logs?.lines ?? [];
-        const sink = ctx.io.json ? process.stderr : process.stdout;
-        for (; printed < lines.length; printed++)
-          sink.write(`${sanitize(lines[printed])}\n`);
-        if (!logs?.done) return { value: null, status: 'deploying' };
-        const detail = await ctx
-          .api()
-          .get(['servers', id, 'deployments', deploymentId]);
-        const status = detail?.deployment?.status ?? 'unknown';
-        return { value: detail?.deployment ?? { status }, status };
-      },
-      { timeoutMs: waitTimeoutMs(ctx), label: 'deployment' },
+    const dep = await followDeployment(
+      ctx,
+      { id, name },
+      deploymentId,
+      waitTimeoutMs(ctx),
     );
     if (dep.status === 'failed')
       throw new CliError('server', 'Deployment failed');
@@ -972,6 +1126,102 @@ register({
     };
   },
 });
+
+async function packageDir(
+  ctx: RunContext,
+  dir: string,
+): Promise<{
+  data: Uint8Array;
+  files: number;
+  bytes: number;
+  names: string[];
+  dockerfile: string;
+  message?: string;
+  info: ReturnType<typeof gitInfo>;
+}> {
+  let st;
+  try {
+    st = statSync(dir);
+  } catch {
+    throw usageError(`No such directory: ${dir}`);
+  }
+  if (!st.isDirectory()) throw usageError(`Not a directory: ${dir}`);
+  const dockerfile = resolveDeployDockerfile(ctx, dir);
+  const packed = await task(`Packaging ${dir}`, ctx.io.theme, async () => {
+    const { files, skipped, mode } = collectSourceFiles(dir);
+    const packed = await packSource(dir, files, { dockerfile });
+    return { ...packed, skipped, mode };
+  });
+  if (packed.skipped.length && !ctx.io.json)
+    process.stderr.write(
+      `${ctx.io.theme.paint('muted', `Skipped directories: ${packed.skipped.join(', ')}`)}\n`,
+    );
+  if (ctx.io.verbose)
+    for (const f of packed.names) process.stderr.write(`${f}\n`);
+  const info = packed.mode === 'git' ? gitInfo(dir) : { dirty: false };
+  const message = ctx.flags.message
+    ? String(ctx.flags.message)
+    : info.subject
+      ? info.subject + (info.dirty ? ' (uncommitted changes)' : '')
+      : undefined;
+  return { ...packed, dockerfile, message, info };
+}
+
+async function uploadPackage(
+  ctx: RunContext,
+  serverId: string,
+  pkg: Awaited<ReturnType<typeof packageDir>>,
+): Promise<any> {
+  return task(`Uploading ${bytes(pkg.data.length)}`, ctx.io.theme, () =>
+    ctx.api().upload(['servers', serverId, 'deploy', 'upload'], pkg.data, {
+      query: {
+        dockerfile: pkg.dockerfile,
+        message: pkg.message,
+        commit: pkg.info.commit,
+        branch: pkg.info.branch,
+      },
+      summary: {
+        archive: 'source.tar.gz',
+        files: pkg.files,
+        bytes: pkg.bytes,
+        compressedBytes: pkg.data.length,
+        dockerfile: pkg.dockerfile,
+        query: {
+          dockerfile: pkg.dockerfile,
+          message: pkg.message,
+          commit: pkg.info.commit,
+          branch: pkg.info.branch,
+        },
+      },
+    }),
+  );
+}
+
+export function resolveDeployDockerfile(ctx: RunContext, dir: string): string {
+  const flag = ctx.flags.dockerfile
+    ? String(ctx.flags.dockerfile)
+    : 'Dockerfile';
+  const absDir = path.resolve(dir);
+  const abs = ctx.flags.dockerfile
+    ? existsSyncFs(path.resolve(flag))
+      ? path.resolve(flag)
+      : path.resolve(absDir, flag)
+    : path.resolve(absDir, flag);
+  const rel = path.relative(absDir, abs).split(path.sep).join('/');
+  if (!rel) throw usageError(`--dockerfile must be a file inside ${dir}`);
+  if (rel === '..' || rel.startsWith('../') || path.isAbsolute(rel))
+    throw usageError(`--dockerfile must be inside ${dir}`);
+  return rel;
+}
+
+function existsSyncFs(p: string): boolean {
+  try {
+    statSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 register({
   path: ['servers', 'deployments', 'list'],

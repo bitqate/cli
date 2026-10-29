@@ -123,6 +123,7 @@ servers  list | get <id> | regions
 servers  create --name <n> --region <daemonId> --memory-mb <n> --cpus <n>
                 --disk-gb <n>  plus exactly one of:
                 --image <ref> | --egg-url <url> | --dockerfile <path> | --git
+                | --dir <path>
                 [--env K=V ...] [--startup <cmd>] [--workspace <id>]
                 [--wait] [--dry-run]
 servers  start|stop|restart <id> [--wait]
@@ -134,7 +135,7 @@ servers  startup <id> [--command <cmd>] [--env K=V ...]
 servers  install-state <id> | wait <id> --status <s>
 servers  backups list|create <id>
 servers  backups restore|delete <id> <backupId>             # destructive
-servers  deploy <id> [--follow]
+servers  deploy <id> [--dir <path>] [--dockerfile <path>] [-m <text>] [--follow]
 servers  deployments list <id> | get|logs <id> <deployId>
 servers  deployments rollback <id> [deployId] [--follow]
 servers  logs <id> [-f] [--tail <n>] [--since 10m|<date>] [-t]
@@ -157,7 +158,8 @@ server's next restart.
 
 `--cpus` accepts fractions (`1.5` → 150 CPU units on servers, `1.5` cores on
 VMs). `servers create --git` creates the server only; connect the repository
-in the dashboard afterwards.
+in the dashboard afterwards, or upload local code with
+`servers deploy <id> --dir .`
 
 ## Using with agents and CI
 
@@ -206,6 +208,14 @@ in the dashboard afterwards.
 `{"version":1,"current":"default","profiles":{"default":{"token":"bqat_..."}}}`.
 The CLI only talks to `https://api.bitqate.com`. No flag, environment variable or
 config key changes that, so a token is never sent anywhere else.
+
+## Deploy local code
+
+`bitqate servers deploy <server> --dir .` packages a directory and deploys it the same way a push does, without going through GitHub. `servers create ... --dir . --wait` creates a server from local code in one step. Useful flags: `--dockerfile <path>` picks a Dockerfile inside the directory (default `Dockerfile`), `-m`/`--message <text>` sets the deployment message, and `--follow` streams the build logs.
+
+Inside a git work tree, tracked files plus untracked files that are not gitignored are sent. Outside git, everything is sent except default excludes (`node_modules`, `.git`, `.next`, `.venv` and similar). `.dockerignore` filters on top either way, and the Dockerfile is always included.
+
+The archive must compress to 50 MB or less, so leave dependencies and build output out; they're rebuilt on the server. Your server's environment variables are available while the image builds and when it runs. Uploaded deployments can't be rolled back because their files aren't kept, and on a GitHub-connected server the next push replaces the upload.
 
 ## License
 

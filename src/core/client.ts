@@ -149,32 +149,99 @@ export class ApiClient {
         continue;
       }
 
-      const text = await readCappedText(resp, MAX_BODY_BYTES);
-      let data: any = null;
-      try {
-        data = text ? JSON.parse(text) : null;
-      } catch {
-        throw new CliError(
-          'server',
-          `API returned an unreadable response (HTTP ${resp.status})`,
-          { status: resp.status },
-        );
-      }
-
-      if (!resp.ok || (data && data.success === false)) {
-        const message =
-          data && typeof data.message === 'string'
-            ? data.message
-            : `Request failed (HTTP ${resp.status})`;
-        const retryAfter = resp.headers.get('Retry-After');
-        throw statusToError(
-          resp.status,
-          message,
-          retryAfter ? Number(retryAfter) : undefined,
-        );
-      }
-      return data;
+      return this.parseResponse(resp);
     }
+  }
+
+  private async parseResponse(resp: Response): Promise<any> {
+    if (resp.status >= 300 && resp.status < 400) {
+      throw new CliError(
+        'server',
+        `API returned an unexpected redirect (HTTP ${resp.status})`,
+        { status: resp.status },
+      );
+    }
+
+    const text = await readCappedText(resp, MAX_BODY_BYTES);
+    let data: any = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      if (resp.status === 413) {
+        throw new CliError(
+          'usage',
+          'Upload too large (HTTP 413). The limit is 50 MB compressed.',
+        );
+      }
+      throw new CliError(
+        'server',
+        `API returned an unreadable response (HTTP ${resp.status})`,
+        { status: resp.status },
+      );
+    }
+
+    if (!resp.ok || (data && data.success === false)) {
+      const message =
+        data && typeof data.message === 'string'
+          ? data.message
+          : `Request failed (HTTP ${resp.status})`;
+      const retryAfter = resp.headers.get('Retry-After');
+      throw statusToError(
+        resp.status,
+        message,
+        retryAfter ? Number(retryAfter) : undefined,
+      );
+    }
+    return data;
+  }
+
+  async upload(
+    segments: string[],
+    data: Uint8Array,
+    opts: {
+      query?: Record<string, string | undefined>;
+      summary: Record<string, unknown>;
+    },
+  ): Promise<any> {
+    const url = new URL(API_URL + buildApiPath(...segments));
+    if (opts.query) {
+      for (const [key, value] of Object.entries(opts.query)) {
+        if (value !== undefined) url.searchParams.set(key, String(value));
+      }
+    }
+    const target = url.toString();
+
+    if (this.dryRun) {
+      throw new DryRunRequest('POST', target, opts.summary);
+    }
+
+    let resp: Response;
+    const started = Date.now();
+    try {
+      resp = await this.fetchImpl(target, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          Accept: 'application/json',
+          'User-Agent': userAgent(),
+          'Content-Type': 'application/gzip',
+        },
+        body: data,
+        redirect: 'manual',
+        signal: AbortSignal.timeout(Math.max(this.timeoutMs, 600_000)),
+      });
+    } catch (err) {
+      throw new CliError(
+        'network',
+        `Could not reach the API: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (this.verbose) {
+      process.stderr.write(
+        `POST ${target} -> ${resp.status} (${Date.now() - started}ms)\n`,
+      );
+    }
+    return this.parseResponse(resp);
   }
 
   get(segments: string[], query?: Record<string, string | number | undefined>) {

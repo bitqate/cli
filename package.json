@@ -28,8 +28,11 @@
     "test": "bun test"
   },
   "devDependencies": {
+    "@balena/dockerignore": "1.0.2",
     "@biomejs/biome": "2.5.15",
     "@types/bun": "latest",
+    "@types/tar-stream": "3.1.5",
+    "tar-stream": "3.2.2",
     "typescript": "~6.0.3"
   }
 }

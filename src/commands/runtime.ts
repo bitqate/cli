@@ -1,4 +1,5 @@
 import { CliError, usageError } from '../core/errors';
+import { followDeployment } from './deploy-follow';
 import { waitPoll } from '../core/confirm';
 import { resolveResource } from '../core/resolve';
 import { sanitize } from '../core/output';
@@ -481,12 +482,17 @@ register({
 // newest successful one, i.e. the version before the one that's live.
 export function pickRollbackTarget(deployments: any[]): any | null {
   const ok = deployments
-    .filter(
-      (d) =>
-        d.status === 'success' && /^[0-9a-f]{40}$/i.test(d.commit_sha ?? ''),
-    )
+    .filter((d) => d.status === 'success')
     .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
-  return ok[1] ?? null;
+  return (
+    ok
+      .slice(1)
+      .find(
+        (d) =>
+          d.triggered_by !== 'upload' &&
+          /^[0-9a-f]{40}$/i.test(d.commit_sha ?? ''),
+      ) ?? null
+  );
 }
 
 register({
@@ -538,6 +544,11 @@ register({
             : `No deployment "${ref}" among the last 20 for ${name}`,
         );
       target = matches[0];
+      if (target.triggered_by === 'upload')
+        throw new CliError(
+          'usage',
+          "Uploaded deployments can't be rolled back; deploy the code again with --dir.",
+        );
     } else {
       target = pickRollbackTarget(list);
       if (!target)
@@ -576,28 +587,14 @@ register({
       };
     }
 
-    let printed = 0;
     const timeoutMs = ctx.flags['wait-timeout']
       ? positiveInt(String(ctx.flags['wait-timeout']), 'wait-timeout') * 1000
       : 600_000;
-    const dep = await waitPoll(
-      { name, kind: 'servers' },
-      async () => {
-        const logs = await ctx
-          .api()
-          .get(['servers', id, 'deployments', deploymentId, 'logs']);
-        const lines: string[] = logs?.lines ?? [];
-        const sink = ctx.io.json ? process.stderr : process.stdout;
-        for (; printed < lines.length; printed++)
-          sink.write(`${sanitize(lines[printed])}\n`);
-        if (!logs?.done) return { value: null, status: 'deploying' };
-        const detail = await ctx
-          .api()
-          .get(['servers', id, 'deployments', deploymentId]);
-        const status = detail?.deployment?.status ?? 'unknown';
-        return { value: detail?.deployment ?? { status }, status };
-      },
-      { timeoutMs, label: 'deployment' },
+    const dep = await followDeployment(
+      ctx,
+      { id, name },
+      deploymentId,
+      timeoutMs,
     );
     if (dep.status === 'failed')
       throw new CliError('server', 'Rollback failed');
