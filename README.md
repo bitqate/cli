@@ -91,7 +91,7 @@ and `bitqate schema` lists all of them for agents).
 | `vms:delete` | `vms delete/reinstall`, `vms backups restore/delete` | **destroys data** |
 | `servers:read` | `servers list/get/install-state/logs`, `servers backups list`, `servers deployments list/get/logs`, `servers health get`, `servers network get` | read-only |
 | `servers:power` | `servers start/stop/restart` | |
-| `servers:write` | `servers create/renew/auto-renew/rename/resize/ports/startup/deploy`, `servers backups create`, `servers deployments rollback`, `servers health set/clear`, `servers network enable/disable` | **can charge your balance** |
+| `servers:write` | `servers create/renew/auto-renew/rename/resize/ports/startup/deploy`, `servers backups create`, `servers deployments redeploy/rollback`, `servers health set/clear`, `servers network enable/disable` | **can charge your balance** |
 | `servers:delete` | `servers delete/reinstall`, `servers backups restore/delete` | **destroys data** |
 | any valid token | `prices`, `vms nodes`, `vms os`, `servers regions`, `auth status` | catalog endpoints |
 
@@ -137,7 +137,7 @@ servers  backups list|create <id>
 servers  backups restore|delete <id> <backupId>             # destructive
 servers  deploy <id> [--dir <path>] [--dockerfile <path>] [-m <text>] [--follow]
 servers  deployments list <id> | get|logs <id> <deployId>
-servers  deployments rollback <id> [deployId] [--follow]
+servers  deployments redeploy|rollback <id> [deployId] [--follow]
 servers  logs <id> [-f] [--tail <n>] [--since 10m|<date>] [-t]
 servers  health get <id> | clear <id>
 servers  health set <id> [--type http|tcp] [--path /healthz] [--interval <s>]
@@ -149,6 +149,8 @@ servers  network get <id> | enable <id> [--hostname <name>] | disable <id>
 across restarts and redeploys until Ctrl-C (NDJSON `{"t","line"}` with
 `--json`). `deployments rollback` rebuilds the exact commit of an earlier
 successful deployment (default: the one before the live version).
+`deployments redeploy` builds a deployment's exact commit again, for example
+to retry a failed build (default: the newest deployment).
 `health set` makes git deploys wait for the check before switching traffic,
 restores the previous version when a deploy never passes it, and restarts a
 running server that keeps failing (at most 3 times an hour).
@@ -215,7 +217,7 @@ config key changes that, so a token is never sent anywhere else.
 
 Inside a git work tree, tracked files plus untracked files that are not gitignored are sent. Outside git, everything is sent except default excludes (`node_modules`, `.git`, `.next`, `.venv` and similar). `.dockerignore` filters on top either way, and the Dockerfile is always included.
 
-The archive must compress to 50 MB or less, so leave dependencies and build output out; they're rebuilt on the server. Your server's environment variables are available while the image builds and when it runs. Uploaded deployments can't be rolled back because their files aren't kept, and on a GitHub-connected server the next push replaces the upload.
+The archive must compress to 50 MB or less, so leave dependencies and build output out; they're rebuilt on the server. Your server's environment variables are available while the image builds and when it runs. Uploaded deployments can't be redeployed or rolled back because their files aren't kept, and on a GitHub-connected server the next push replaces the upload.
 
 ## License
 

@@ -142,7 +142,14 @@ const GROUP_SECTIONS: Record<string, [string, string[]][]> = {
     ['Connect', ['open']],
     [
       'Deploy',
-      ['deploy', 'deployments list', 'deployments get', 'deployments logs'],
+      [
+        'deploy',
+        'deployments list',
+        'deployments get',
+        'deployments logs',
+        'deployments redeploy',
+        'deployments rollback',
+      ],
     ],
     ['Config', ['startup', 'ports']],
     [
@@ -151,7 +158,9 @@ const GROUP_SECTIONS: Record<string, [string, string[]][]> = {
     ],
     ['Info', ['regions', 'install-state', 'wait']],
   ],
-  'servers deployments': [['Deployments', ['list', 'get', 'logs']]],
+  'servers deployments': [
+    ['Deployments', ['list', 'get', 'logs', 'redeploy', 'rollback']],
+  ],
   'servers backups': [['Backups', ['list', 'create', 'restore', 'delete']]],
   auth: [
     ['Profiles', ['login', 'logout', 'list', 'switch']],

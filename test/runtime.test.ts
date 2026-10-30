@@ -2,8 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import { ApiClient } from '../src/core/client';
 import { CliError } from '../src/core/errors';
 import {
+  findDeployment,
   ndjson,
   parseSince,
+  pickRedeployTarget,
   pickRollbackTarget,
 } from '../src/commands/runtime';
 
@@ -95,6 +97,64 @@ describe('pickRollbackTarget', () => {
         },
       ]),
     ).toBeNull();
+  });
+});
+
+describe('pickRedeployTarget', () => {
+  test('picks the newest deployment whatever its status', () => {
+    const target = pickRedeployTarget([
+      {
+        id: '2',
+        status: 'success',
+        created_at: '2026-10-25T03:00:00Z',
+      },
+      {
+        id: '1',
+        status: 'failed',
+        triggered_by: 'manual',
+        commit_sha: 'HEAD',
+        created_at: '2026-10-25T04:00:00Z',
+      },
+    ]);
+    expect(target?.id).toBe('1');
+  });
+  test('returns null for an empty history', () => {
+    expect(pickRedeployTarget([])).toBeNull();
+  });
+});
+
+describe('findDeployment', () => {
+  const list = [
+    { id: 'aaaaaaaa-1111-2222' },
+    { id: 'aaaaaaaa-bbbb-3333' },
+    { id: 'cccccccc-1111-2222' },
+  ];
+  test('matches a full ID and a unique prefix', () => {
+    expect(findDeployment(list, 'cccccccc-1111-2222', 'api')?.id).toBe(
+      'cccccccc-1111-2222',
+    );
+    expect(findDeployment(list, 'cccccccc', 'api')?.id).toBe(
+      'cccccccc-1111-2222',
+    );
+  });
+  test('ambiguous prefix throws usage, unknown throws not_found', () => {
+    try {
+      findDeployment(list, 'aaaaaaaa', 'api');
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(CliError);
+      expect((err as CliError).code).toBe('usage');
+    }
+    try {
+      findDeployment(list, 'dddddddd', 'api');
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(CliError);
+      expect((err as CliError).code).toBe('not_found');
+      expect((err as CliError).message).toContain(
+        'No deployment "dddddddd" among the last 20 for api',
+      );
+    }
   });
 });
 

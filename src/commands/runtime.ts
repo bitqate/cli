@@ -495,6 +495,24 @@ export function pickRollbackTarget(deployments: any[]): any | null {
   );
 }
 
+export function findDeployment(
+  deployments: any[],
+  ref: string,
+  name: string,
+): any {
+  const matches = deployments.filter(
+    (d: any) => d.id === ref || d.id.startsWith(ref),
+  );
+  if (matches.length !== 1)
+    throw new CliError(
+      matches.length ? 'usage' : 'not_found',
+      matches.length
+        ? `Deployment ID "${ref}" is ambiguous`
+        : `No deployment "${ref}" among the last 20 for ${name}`,
+    );
+  return matches[0];
+}
+
 register({
   path: ['servers', 'deployments', 'rollback'],
   summary: 'Redeploy the commit of an earlier deployment',
@@ -532,18 +550,7 @@ register({
       (await ctx.api().get(['servers', id, 'deployments']))?.deployments ?? [];
     let target: any;
     if (ctx.args[1]) {
-      const ref = ctx.args[1];
-      const matches = list.filter(
-        (d: any) => d.id === ref || d.id.startsWith(ref),
-      );
-      if (matches.length !== 1)
-        throw new CliError(
-          matches.length ? 'usage' : 'not_found',
-          matches.length
-            ? `Deployment ID "${ref}" is ambiguous`
-            : `No deployment "${ref}" among the last 20 for ${name}`,
-        );
-      target = matches[0];
+      target = findDeployment(list, ctx.args[1], name);
       if (target.triggered_by === 'upload')
         throw new CliError(
           'usage',
@@ -608,6 +615,132 @@ register({
       },
       render: (_d, ui) => ({
         lines: [checkmark(ui, `${name} is back on ${sha}`)],
+      }),
+    };
+  },
+});
+
+export function pickRedeployTarget(deployments: any[]): any | null {
+  return (
+    deployments
+      .slice()
+      .sort((a, b) =>
+        String(b.created_at).localeCompare(String(a.created_at)),
+      )[0] ?? null
+  );
+}
+
+register({
+  path: ['servers', 'deployments', 'redeploy'],
+  summary: 'Rebuild the commit of a deployment',
+  description:
+    'Builds the exact commit of a finished deployment again with the ' +
+    'server’s current env vars, e.g. to retry a failed build. Without a ' +
+    'deployment ID it redeploys the newest one. A failed manual deploy has ' +
+    'no recorded commit, so redeploying it builds the branch tip.',
+  args: [
+    { name: 'id', required: false, description: 'Server name or ID' },
+    {
+      name: 'deployId',
+      required: false,
+      description: 'Deployment ID (default: newest)',
+    },
+  ],
+  flags: {
+    follow: {
+      type: 'boolean',
+      description: 'Stream deployment logs to the end',
+    },
+    'wait-timeout': {
+      type: 'string',
+      placeholder: 'seconds',
+      description: 'Seconds before giving up',
+    },
+  },
+  scope: 'servers:write',
+  examples: [
+    'bitqate servers deployments redeploy api --follow',
+    'bitqate servers deployments redeploy api 3f2a9c1e',
+  ],
+  async run(ctx) {
+    const { id, name } = await resolveSrv(ctx);
+    const list =
+      (await ctx.api().get(['servers', id, 'deployments']))?.deployments ?? [];
+    let target: any;
+    if (ctx.args[1]) {
+      target = findDeployment(list, ctx.args[1], name);
+    } else {
+      target = pickRedeployTarget(list);
+      if (!target)
+        throw new CliError(
+          'not_found',
+          `${name} has no deployments to redeploy`,
+        );
+    }
+    if (target.triggered_by === 'upload')
+      throw new CliError(
+        'usage',
+        "Uploaded deployments can't be redeployed; deploy the code again with --dir.",
+      );
+
+    const resp = await ctx
+      .api()
+      .post(['servers', id, 'deployments', target.id, 'redeploy'], {});
+    const deploymentId = resp?.deploymentId;
+    const commitSha = resp?.commitSha ?? null;
+    const detail = commitSha
+      ? `at ${String(commitSha).slice(0, 8)}`
+      : `from the tip of ${target.branch ?? 'its branch'}`;
+    if (!ctx.flags.follow || !deploymentId) {
+      return {
+        data: {
+          id,
+          deploymentId,
+          redeployOf: target.id,
+          commitSha,
+          status: resp?.status,
+        },
+        render: (_d, ui) => ({
+          lines: [
+            checkmark(
+              ui,
+              `Redeploying ${name} ${detail} (deployment ${shortId(deploymentId ?? '')})`,
+            ),
+            ui.theme.paint(
+              'muted',
+              `Follow with: bitqate servers deployments logs ${name} ${deploymentId}`,
+            ),
+          ],
+        }),
+      };
+    }
+
+    const timeoutMs = ctx.flags['wait-timeout']
+      ? positiveInt(String(ctx.flags['wait-timeout']), 'wait-timeout') * 1000
+      : 600_000;
+    const dep = await followDeployment(
+      ctx,
+      { id, name },
+      deploymentId,
+      timeoutMs,
+    );
+    if (dep.status === 'failed')
+      throw new CliError('server', 'Redeploy failed');
+    return {
+      data: {
+        id,
+        deploymentId,
+        redeployOf: target.id,
+        commitSha: dep.commit_sha ?? commitSha,
+        status: dep.status,
+      },
+      render: (_d, ui) => ({
+        lines: [
+          checkmark(
+            ui,
+            `${name} is live on ${String(dep.commit_sha ?? commitSha ?? '').slice(0, 8)}`,
+          ),
+        ],
       }),
     };
   },
