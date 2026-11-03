@@ -6,7 +6,7 @@ import {
 } from '../registry';
 import type { Theme } from './theme';
 
-const DOCS = 'https://portal.bitqate.com/docs';
+const DOCS = 'https://bitqate.com/docs';
 const PORTAL = 'https://portal.bitqate.com';
 
 const ROOT_SECTIONS: [string, [string, string][]][] = [
