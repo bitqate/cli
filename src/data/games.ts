@@ -133,7 +133,7 @@ export const GAMES: GameEntry[] = [
     eggUrl:
       'https://raw.githubusercontent.com/pelican-eggs/eggs/master/game_eggs/steamcmd_servers/project_zomboid/egg-project-zomboid.json',
     startup:
-      'export PATH="./jre64/bin:$PATH" ; export LD_LIBRARY_PATH="./linux64:./natives:.:./jre64/lib/amd64:${LD_LIBRARY_PATH}" ; ./ProjectZomboid64 -port {{SERVER_PORT}} -udpport {{STEAM_PORT}} -servername "{{SERVER_NAME}}" -adminusername "{{ADMIN_USER}} -adminpassword "{{ADMIN_PASSWORD}}"',
+      'export PATH="./jre64/bin:$PATH" ; export LD_LIBRARY_PATH="./linux64:./natives:.:./jre64/lib/amd64:${LD_LIBRARY_PATH}" ; ./ProjectZomboid64 -port {{SERVER_PORT}} -udpport {{STEAM_PORT}} -servername "{{SERVER_NAME}}" -adminusername "{{ADMIN_USER}}" -adminpassword "{{ADMIN_PASSWORD}}"',
     variables: {
       SERVER_NAME: 'BitQate',
       ADMIN_USER: 'admin',
