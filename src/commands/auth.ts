@@ -1,14 +1,14 @@
 import { API_URL, ApiClient } from '../core/client';
-import {
-  DEFAULT_PROFILE,
-  loadConfig,
-  saveConfig,
-} from '../core/config';
+import { DEFAULT_PROFILE, loadConfig, saveConfig } from '../core/config';
 import { CliError, usageError } from '../core/errors';
 import { readStdin } from '../core/io';
 import { password } from '../ui/prompts';
 import { isApiTokenFormat } from '../core/validate';
 import { register } from '../registry';
+import { browserLogin } from '../core/browser-login';
+import { portalUrl } from '../core/portal';
+import { isInteractive } from '../ui/spinner';
+import type { Theme } from '../ui/theme';
 
 const SCOPE_ORDER = (s: string) => {
   if (s === 'account:read') return 0;
@@ -40,111 +40,195 @@ function formatExpiry(expiresAt: number | null | undefined): string {
   return new Date(expiresAt * 1000).toISOString();
 }
 
-register({
-  path: ['auth', 'login'],
-  summary: 'Store an API token in a config profile',
-  args: [],
-  flags: {
-    'token-stdin': {
-      type: 'boolean',
-      description: 'Read the token from stdin instead of a prompt',
-    },
-  },
-  scope: null,
-  interactive: true,
-  examples: [
-    'bitqate auth login',
-    'bitqate auth login --token-stdin < token.txt',
-    'bitqate auth login --profile ci --token-stdin < token.txt',
-  ],
-  async run(ctx) {
-    const profile = ctx.flags.profile ?? ctx.auth.profile ?? DEFAULT_PROFILE;
+export async function saveLogin(
+  profile: string,
+  token: string,
+  via: 'browser' | 'token',
+): Promise<{
+  key_id: string;
+  name: string;
+  scopes: string[];
+  expires_at: number | null;
+  username: string | null;
+}> {
+  const client = new ApiClient({ token });
+  const resp = await client.get(['token']);
+  const info = resp?.token;
+  if (!info || info.key_id === undefined)
+    throw new CliError('server', 'Unexpected response from /v1/token');
 
-    let token: string;
-    if (ctx.flags['token-stdin']) {
-      token = (await readStdin()).trim();
-    } else {
-      if (!process.stdin.isTTY || !process.stderr.isTTY)
-        throw usageError(
-          'No terminal available; pass the token with --token-stdin instead.',
-        );
-      process.stderr.write(
-        'Create a token at https://portal.bitqate.com/settings?tab=api\nGrant only the scopes you need and set an expiry for automation.\n',
-      );
-      token = (await password({ message: 'API token' }, ctx.io.theme)).trim();
-    }
-    if (!isApiTokenFormat(token))
-      throw usageError(
-        'Malformed token: expected the format bqat_<key_id>_<secret>.',
-      );
+  let username: string | null = null;
+  try {
+    const acct = await client.get(['account']);
+    username = acct?.account?.username ?? null;
+  } catch {}
 
-    const client = new ApiClient({ token });
-    const resp = await client.get(['token']);
-    const info = resp?.token;
-    if (!info || info.key_id === undefined)
-      throw new CliError('server', 'Unexpected response from /v1/token');
+  const config = loadConfig();
+  config.profiles[profile] = { token, via };
+  config.current = profile;
+  saveConfig(config);
+  return {
+    key_id: info.key_id,
+    name: info.name,
+    scopes: info.scopes ?? [],
+    expires_at: info.expires_at ?? null,
+    username,
+  };
+}
 
-    let username: string | null = null;
-    try {
-      const acct = await client.get(['account']);
-      username = acct?.account?.username ?? null;
-    } catch {}
+export async function interactiveLogin(
+  profile: string,
+  theme: Theme,
+  opts: { openBrowser?: boolean; interactive?: boolean } = {},
+) {
+  const result = await browserLogin({
+    theme,
+    openBrowser: opts.openBrowser ?? true,
+    interactive: opts.interactive ?? isInteractive(),
+  });
+  return saveLogin(profile, result.token, 'browser');
+}
 
-    const config = loadConfig();
-    config.profiles[profile] = { token };
-    config.current = profile;
-    saveConfig(config);
-
-    const data = {
-      profile,
-      username,
-      key_id: info.key_id,
-      name: info.name,
-      scopes: info.scopes,
-      expires_at: info.expires_at,
-    };
-    return {
-      data,
-      render: (d, ui) => {
-        const who = d.username ? ` as ${d.username}` : '';
-        const scopeCount = (d.scopes ?? []).length;
-        return {
-          lines: [
-            `${ui.theme.paint('success', ui.theme.glyph('check'))} Logged in${who} · token "${d.name}" · ${scopeCount} scope${scopeCount === 1 ? '' : 's'} · profile ${d.profile}`,
-          ],
-        };
+const loginCommand = (path: string[]) =>
+  register({
+    path,
+    summary: 'Log in through your browser',
+    description:
+      'Opens portal.bitqate.com, where you approve this computer. No token copying needed. Use --with-token or --token-stdin to log in with an API token instead (for CI and scripts).',
+    args: [],
+    flags: {
+      'no-browser': {
+        type: 'boolean',
+        description: 'Print the sign-in link instead of opening a browser',
       },
-    };
-  },
-});
+      'with-token': {
+        type: 'boolean',
+        description: 'Paste an API token instead of using the browser',
+      },
+      'token-stdin': {
+        type: 'boolean',
+        description: 'Read an API token from stdin (for CI)',
+      },
+    },
+    scope: null,
+    interactive: true,
+    examples: [
+      'bitqate login',
+      'bitqate login --no-browser',
+      'bitqate login --with-token',
+      'bitqate login --profile ci --token-stdin < token.txt',
+    ],
+    async run(ctx) {
+      const profile = ctx.flags.profile ?? ctx.auth.profile ?? DEFAULT_PROFILE;
 
-register({
-  path: ['auth', 'logout'],
-  summary: 'Remove a stored API token profile',
-  args: [],
-  flags: {},
-  scope: null,
-  examples: ['bitqate auth logout', 'bitqate auth logout --profile ci'],
-  async run(ctx) {
-    const profile = ctx.flags.profile ?? ctx.auth.profile ?? DEFAULT_PROFILE;
-    const config = loadConfig();
-    if (!config.profiles[profile])
-      throw usageError(`No such profile '${profile}'`);
-    delete config.profiles[profile];
-    if (config.current === profile) {
-      config.current = Object.keys(config.profiles)[0] ?? undefined;
-    }
-    saveConfig(config);
-    return {
-      data: { profile, removed: true },
-      render: (d, ui) => ({
-        lines: [
-          `${ui.theme.paint('success', ui.theme.glyph('check'))} Removed profile '${d.profile}'.`,
-        ],
-      }),
-    };
-  },
-});
+      let saved: Awaited<ReturnType<typeof saveLogin>>;
+      if (ctx.flags['token-stdin'] || ctx.flags['with-token']) {
+        let token: string;
+        if (ctx.flags['token-stdin']) {
+          token = (await readStdin()).trim();
+        } else {
+          if (!process.stdin.isTTY || !process.stderr.isTTY)
+            throw usageError(
+              'No terminal available; pass the token with --token-stdin instead.',
+            );
+          process.stderr.write(
+            `Create a token at ${portalUrl('home')}/settings?tab=api\n`,
+          );
+          token = (
+            await password({ message: 'API token' }, ctx.io.theme)
+          ).trim();
+        }
+        if (!isApiTokenFormat(token))
+          throw usageError(
+            'That does not look like a BitQate token (bqat_<key_id>_<secret>).',
+          );
+        saved = await saveLogin(profile, token, 'token');
+      } else {
+        saved = await interactiveLogin(profile, ctx.io.theme, {
+          openBrowser: !ctx.flags['no-browser'],
+          interactive: ctx.io.interactive,
+        });
+      }
+
+      const data = { profile, ...saved };
+      return {
+        data,
+        render: (d, ui) => {
+          const who = d.username
+            ? ` as ${ui.theme.paint('strong', d.username)}`
+            : '';
+          const lines = [
+            `${ui.theme.paint('success', ui.theme.glyph('check'))} Logged in${who}`,
+          ];
+          if (d.profile !== DEFAULT_PROFILE)
+            lines.push(ui.theme.paint('muted', `  Profile ${d.profile}`));
+          lines.push(
+            '',
+            ui.theme.paint('muted', 'Next steps'),
+            `  bitqate deploy         ${ui.theme.paint('muted', 'Deploy this folder, an image, a database or a game server')}`,
+            `  bitqate vms create     ${ui.theme.paint('muted', 'Create a VPS')}`,
+            `  bitqate servers list   ${ui.theme.paint('muted', 'See what is running')}`,
+          );
+          return { lines };
+        },
+      };
+    },
+  });
+
+loginCommand(['auth', 'login']);
+loginCommand(['login']);
+
+const logoutCommand = (path: string[]) =>
+  register({
+    path,
+    summary: 'Log out and forget the stored token',
+    args: [],
+    flags: {},
+    scope: null,
+    examples: ['bitqate logout', 'bitqate logout --profile ci'],
+    async run(ctx) {
+      const profile = ctx.flags.profile ?? ctx.auth.profile ?? DEFAULT_PROFILE;
+      const config = loadConfig();
+      const entry = config.profiles[profile];
+      if (!entry)
+        throw new CliError(
+          'usage',
+          `You're not logged in${profile !== DEFAULT_PROFILE ? ` on profile '${profile}'` : ''}.`,
+          {
+            hint: 'Run bitqate login',
+          },
+        );
+      let revoked = false;
+      if (
+        entry.via === 'browser' &&
+        entry.token &&
+        isApiTokenFormat(entry.token)
+      ) {
+        try {
+          await new ApiClient({ token: entry.token, timeoutMs: 8000 }).delete([
+            'token',
+          ]);
+          revoked = true;
+        } catch {}
+      }
+      delete config.profiles[profile];
+      if (config.current === profile) {
+        config.current = Object.keys(config.profiles)[0] ?? undefined;
+      }
+      saveConfig(config);
+      return {
+        data: { profile, removed: true, revoked },
+        render: (d, ui) => ({
+          lines: [
+            `${ui.theme.paint('success', ui.theme.glyph('check'))} Logged out${d.profile !== DEFAULT_PROFILE ? ` of profile '${d.profile}'` : ''}.`,
+          ],
+        }),
+      };
+    },
+  });
+
+logoutCommand(['auth', 'logout']);
+logoutCommand(['logout']);
 
 register({
   path: ['auth', 'status'],
@@ -203,7 +287,7 @@ register({
       data,
       render: (rows: any[]) => {
         if (!rows.length)
-          return { lines: ['No profiles. Run `bitqate auth login`.'] };
+          return { lines: ['Not logged in. Run bitqate login.'] };
         return {
           table: {
             columns: [{ title: 'Profile' }, { title: 'Current' }],

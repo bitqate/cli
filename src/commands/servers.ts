@@ -6,6 +6,13 @@ import { priceMap, serverMonthly } from '../core/pricing';
 import { resolveOption, resolveResource } from '../core/resolve';
 import { detailToLines, sanitize } from '../core/output';
 import { findGame, GAMES } from '../data/games';
+import {
+  connectionString,
+  databaseForImage,
+  findDatabase,
+  type DatabaseEntry,
+} from '../data/images';
+import type { Theme } from '../ui/theme';
 import { task } from '../ui/spinner';
 import { confirm, select, text } from '../ui/prompts';
 import {
@@ -22,6 +29,7 @@ import { cpusToUnits, parseEnvPairs, positiveInt } from '../core/validate';
 import { register, type RunContext } from '../registry';
 import { serverWizard } from '../wizards/server';
 import { followDeployment } from './deploy-follow';
+import { ensureDockerfile } from '../core/dockerfile';
 import {
   collectSourceFiles,
   gitInfo,
@@ -71,6 +79,93 @@ async function waitForServerStatus(
       ),
     { endStyle: 'ok' },
   );
+}
+
+function bareHost(host: string): string {
+  if (host.startsWith('[')) return host.slice(0, host.indexOf(']') + 1);
+  return host.split(':')[0];
+}
+
+export async function databaseConnection(
+  ctx: RunContext,
+  resolved: { id: string; name: string },
+  db: DatabaseEntry,
+): Promise<{
+  host: string;
+  port: number;
+  url: string;
+  username?: string;
+  password?: string;
+  database?: string;
+} | null> {
+  const server = await waitForServerStatus(
+    ctx,
+    resolved,
+    new Set(['running', 'online']),
+    'Starting',
+  ).catch((err) => {
+    if (err instanceof CliError && err.code === 'cancelled') throw err;
+    return null;
+  });
+  const address = server?.address;
+  if (!address?.host || !address?.port) return null;
+  const host = bareHost(String(address.host));
+  const port = Number(address.port);
+  let creds: Record<string, any> = {};
+  for (let i = 0; i < 10; i++) {
+    try {
+      const resp = await ctx.api().get(['servers', resolved.id, 'database']);
+      creds = resp?.credentials ?? {};
+      break;
+    } catch (err) {
+      if (
+        err instanceof CliError &&
+        (err.code === 'forbidden' || err.code === 'not_found')
+      )
+        break;
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+  return {
+    host,
+    port,
+    url: connectionString(db, host, port, creds),
+    username: creds.username ?? creds.user,
+    password: creds.password ?? undefined,
+    database: creds.db ?? creds.database,
+  };
+}
+
+export function connectionLines(
+  theme: Theme,
+  name: string,
+  db: DatabaseEntry,
+  conn: Awaited<ReturnType<typeof databaseConnection>>,
+): string[] {
+  const check = `${theme.paint('success', theme.glyph('check'))}`;
+  if (!conn)
+    return [
+      `${check} Created ${name} (${db.name})`,
+      `  ${theme.paint('muted', `It's still starting. Get the address with: bitqate servers get ${name}`)}`,
+    ];
+  const rows: [string, string | undefined][] = [
+    ['Host', conn.host],
+    ['Port', String(conn.port)],
+    ['User', conn.username],
+    ['Password', conn.password],
+    ['Database', conn.database],
+  ];
+  const lines = [`${check} ${name} is ready (${db.name})`, ''];
+  for (const [k, v] of rows)
+    if (v) lines.push(`  ${theme.paint('muted', k.padEnd(9))} ${sanitize(v)}`);
+  lines.push(
+    '',
+    `  ${theme.paint('muted', 'Connection string')}`,
+    `  ${sanitize(conn.url)}`,
+    '',
+    `  ${theme.paint('muted', 'Keep the password safe. Anyone with it can connect.')}`,
+  );
+  return lines;
 }
 
 async function waitForInstall(
@@ -291,6 +386,11 @@ register({
       placeholder: 'name',
       description: 'Game from the catalog (e.g. Paper)',
     },
+    database: {
+      type: 'string',
+      placeholder: 'engine',
+      description: 'postgres, mysql, mongo or redis',
+    },
     dockerfile: {
       type: 'string',
       placeholder: 'path',
@@ -337,10 +437,19 @@ register({
     'bitqate servers create',
     'bitqate servers create --name api --region ca-mo-01 --memory-mb 1024 --cpus 1 --disk-gb 10 --image ghcr.io/org/app:latest',
     'bitqate servers create --game paper',
+    'bitqate servers create --database postgres --region ca-mo-01',
   ],
   async run(ctx) {
+    const dbEntry = ctx.flags.database
+      ? findDatabase(String(ctx.flags.database))
+      : undefined;
+    if (ctx.flags.database && !dbEntry)
+      throw usageError(
+        `Unknown database '${ctx.flags.database}' (choose from postgres, mysql, mongo or redis)`,
+      );
     const sources = [
       ctx.flags.image,
+      ctx.flags.database,
       ctx.flags['egg-url'],
       ctx.flags.game,
       ctx.flags.dockerfile && !ctx.flags.dir ? ctx.flags.dockerfile : undefined,
@@ -349,15 +458,17 @@ register({
     ].filter((v) => v !== undefined && v !== false);
     if (sources.length > 1)
       throw usageError(
-        'Pass only one of --image, --egg-url, --game, --dockerfile, --git or --dir',
+        'Pass only one of --image, --database, --egg-url, --game, --dockerfile, --git or --dir',
       );
 
+    const sizeDefaults = dbEntry?.size;
     const missingRequired =
-      !ctx.flags.name ||
+      (!ctx.flags.name && !dbEntry) ||
       !ctx.flags.region ||
-      !ctx.flags['memory-mb'] ||
-      !ctx.flags.cpus ||
-      !ctx.flags['disk-gb'] ||
+      (!sizeDefaults &&
+        (!ctx.flags['memory-mb'] ||
+          !ctx.flags.cpus ||
+          !ctx.flags['disk-gb'])) ||
       !sources.length;
     const useWizard = ctx.io.interactive && !ctx.io.json && missingRequired;
 
@@ -365,10 +476,13 @@ register({
     let mode: string;
     let name: string;
     let wizardDir: string | undefined;
+    let database: DatabaseEntry | undefined =
+      dbEntry ??
+      (ctx.flags.image ? databaseForImage(String(ctx.flags.image)) : undefined);
     if (!useWizard) {
       if (sources.length !== 1)
         throw usageError(
-          'Pass exactly one of --image, --egg-url, --game, --dockerfile, --git or --dir',
+          'Pass exactly one of --image, --database, --egg-url, --game, --dockerfile, --git or --dir',
         );
       const region = await resolveOption(
         ctx,
@@ -378,13 +492,22 @@ register({
         'region',
       );
       body = {
-        name: ctx.flags.name,
+        name: ctx.flags.name ?? dbEntry?.key,
         daemonId: region,
-        ram: positiveInt(ctx.flags['memory-mb'], 'memory-mb'),
-        cpu: cpusToUnits(ctx.flags.cpus, 'cpus'),
-        disk: positiveInt(ctx.flags['disk-gb'], 'disk-gb'),
+        ram: ctx.flags['memory-mb']
+          ? positiveInt(ctx.flags['memory-mb'], 'memory-mb')
+          : sizeDefaults?.mem,
+        cpu: ctx.flags.cpus
+          ? cpusToUnits(ctx.flags.cpus, 'cpus')
+          : sizeDefaults?.cpu,
+        disk: ctx.flags['disk-gb']
+          ? positiveInt(ctx.flags['disk-gb'], 'disk-gb')
+          : sizeDefaults?.disk,
       };
-      if (ctx.flags.image) {
+      if (dbEntry) {
+        body.mode = 'image';
+        body.image = dbEntry.image;
+      } else if (ctx.flags.image) {
         body.mode = 'image';
         body.image = ctx.flags.image;
       } else if (ctx.flags['egg-url']) {
@@ -430,11 +553,12 @@ register({
           'workspace',
         );
       mode = body.mode as string;
-      name = ctx.flags.name;
+      name = String(body.name);
     } else {
-      const w = await serverWizard(ctx);
+      const w = await serverWizard(ctx, ctx.flags.__source);
       ({ body, mode, name } = w);
       wizardDir = w.dir;
+      database = w.database;
     }
 
     const dir = ctx.flags.dir ?? wizardDir;
@@ -507,6 +631,15 @@ register({
       };
     }
     const data: Record<string, unknown> = { id, name, mode };
+    if (database && (ctx.flags.wait || (ctx.io.interactive && !ctx.io.json))) {
+      const conn = await databaseConnection(ctx, { id, name }, database);
+      return {
+        data: { ...data, connection: conn },
+        render: (_d, ui) => ({
+          lines: connectionLines(ui.theme, name, database!, conn),
+        }),
+      };
+    }
     if (mode === 'git' && !ctx.flags.dir)
       data.hint = `Connect the git repository in the dashboard, or upload code with: bitqate servers deploy ${ref} --dir .`;
 
@@ -1147,6 +1280,7 @@ async function packageDir(
   }
   if (!st.isDirectory()) throw usageError(`Not a directory: ${dir}`);
   const dockerfile = resolveDeployDockerfile(ctx, dir);
+  await ensureDockerfile(ctx, dir, dockerfile);
   const packed = await task(`Packaging ${dir}`, ctx.io.theme, async () => {
     const { files, skipped, mode } = collectSourceFiles(dir);
     const packed = await packSource(dir, files, { dockerfile });

@@ -315,3 +315,60 @@ export class ApiClient {
     return resp;
   }
 }
+
+export async function publicRequest(
+  method: 'GET' | 'POST',
+  path: string,
+  opts: {
+    body?: unknown;
+    query?: Record<string, string>;
+    fetchImpl?: typeof fetch;
+    timeoutMs?: number;
+  } = {},
+): Promise<any> {
+  const url = new URL(API_URL + path);
+  for (const [k, v] of Object.entries(opts.query ?? {}))
+    url.searchParams.set(k, v);
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    'User-Agent': userAgent(),
+  };
+  if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
+  let resp: Response;
+  try {
+    resp = await (opts.fetchImpl ?? fetch)(url.toString(), {
+      method,
+      headers,
+      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(opts.timeoutMs ?? REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    throw new CliError(
+      'network',
+      `Could not reach BitQate: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const text = await readCappedText(resp, MAX_BODY_BYTES);
+  let data: any = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    throw new CliError(
+      'server',
+      `BitQate returned an unreadable response (HTTP ${resp.status})`,
+      { status: resp.status },
+    );
+  }
+  if (!resp.ok || (data && data.success === false)) {
+    const retryAfter = resp.headers.get('Retry-After');
+    throw statusToError(
+      resp.status,
+      typeof data?.message === 'string'
+        ? data.message
+        : `Request failed (HTTP ${resp.status})`,
+      retryAfter ? Number(retryAfter) : undefined,
+    );
+  }
+  return data;
+}

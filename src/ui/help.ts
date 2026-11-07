@@ -11,6 +11,13 @@ const PORTAL = 'https://portal.bitqate.com';
 
 const ROOT_SECTIONS: [string, [string, string][]][] = [
   [
+    'Get started',
+    [
+      ['login', 'Log in through your browser'],
+      ['deploy', 'Deploy your code, an app, a database or a game server'],
+    ],
+  ],
+  [
     'Core',
     [
       ['vms', 'Create and manage virtual private servers'],
@@ -29,7 +36,7 @@ const ROOT_SECTIONS: [string, [string, string][]][] = [
   [
     'Setup',
     [
-      ['auth', 'Log in and manage tokens'],
+      ['auth', 'Profiles, tokens and logout'],
       ['completion', 'Shell completion'],
     ],
   ],
@@ -83,10 +90,11 @@ export function rootHelp(theme: Theme): string {
   lines.push(theme.paint('muted', 'Flags'), ...globalFlagsBlock(theme), '');
   lines.push(theme.paint('muted', 'Examples'));
   for (const e of [
-    'bitqate vms list',
+    'bitqate login',
+    'bitqate deploy',
+    'bitqate deploy --database postgres',
     'bitqate vms create',
-    'bitqate servers deploy api --follow',
-    'bitqate vms ssh dizzy-puma',
+    'bitqate vms network dizzy-puma',
   ])
     lines.push(`  ${e}`);
   lines.push(
@@ -119,10 +127,23 @@ const GROUP_SECTIONS: Record<string, [string, string[]][]> = {
       'Backups',
       ['backups list', 'backups create', 'backups restore', 'backups delete'],
     ],
-    ['Network', ['networking', 'rdns']],
+    [
+      'Network',
+      [
+        'network',
+        'rdns',
+        'dns',
+        'ipv6 list',
+        'ipv6 add',
+        'ipv6 rdns',
+        'ipv6 remove',
+        'networking',
+      ],
+    ],
     ['Info', ['nodes', 'os', 'stats', 'wait']],
   ],
   'vms backups': [['Backups', ['list', 'create', 'restore', 'delete']]],
+  'vms ipv6': [['IPv6', ['list', 'add', 'rdns', 'remove']]],
   servers: [
     [
       'Manage',
@@ -244,6 +265,7 @@ export function commandUsage(cmd: Command): string {
 
 export function commandHelp(cmd: Command, theme: Theme): string {
   const lines: string[] = [cmd.summary, ''];
+  if (cmd.description) lines.push(cmd.description, '');
   lines.push(theme.paint('muted', 'Usage'), `  ${commandUsage(cmd)}`);
   if (cmd.interactive)
     lines.push(

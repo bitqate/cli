@@ -6,6 +6,7 @@ import { isUuid, resolveResource } from '../core/resolve';
 import { register } from '../registry';
 import { sanitize } from '../core/output';
 import { shortId } from '../ui/format';
+import { withTerminalReleased } from '../ui/input-guard';
 
 async function openTarget(
   url: string,
@@ -121,19 +122,22 @@ export async function sshInto(
     `${sanitize(`Connecting to ${user}@${host}`)}${fingerprint ? ` · host key ${sanitize(fingerprint)}` : ''}\n`,
   );
   const extra = ctx.flags['--'] ?? [];
-  const code = await new Promise<number>((resolve, reject) => {
-    const child = spawn('ssh', [`${user}@${host}`, ...extra], {
-      stdio: 'inherit',
-    });
-    child.on('error', () =>
-      reject(
-        new CliError('server', 'Could not run ssh', {
-          hint: 'Install OpenSSH or use the web console in the dashboard',
-        }),
-      ),
-    );
-    child.on('close', (c) => resolve(c ?? 0));
-  });
+  const code = await withTerminalReleased(
+    () =>
+      new Promise<number>((resolve, reject) => {
+        const child = spawn('ssh', [`${user}@${host}`, ...extra], {
+          stdio: 'inherit',
+        });
+        child.on('error', () =>
+          reject(
+            new CliError('server', 'Could not run ssh', {
+              hint: 'Install OpenSSH or use the web console in the dashboard',
+            }),
+          ),
+        );
+        child.on('close', (c) => resolve(c ?? 0));
+      }),
+  );
   process.exitCode = code;
   return { data: { host, user, code } };
 }

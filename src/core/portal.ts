@@ -2,10 +2,14 @@ import { spawn } from 'node:child_process';
 import { usageError } from './errors';
 
 const PORTAL_URL = 'https://portal.bitqate.com';
-const SAFE_URL = /^https?:\/\/[A-Za-z0-9.:/\[\]-]+$/;
+const SAFE_URL = /^https?:\/\/[A-Za-z0-9.:/\[\]?=-]+$/;
 
-export function portalUrl(kind: 'vm' | 'server' | 'home', id?: string): string {
+export function portalUrl(
+  kind: 'vm' | 'server' | 'home' | 'cli',
+  id?: string,
+): string {
   if (kind === 'home') return PORTAL_URL;
+  if (kind === 'cli') return `${PORTAL_URL}/cli?code=${id}`;
   return `${PORTAL_URL}/${kind}/${id}`;
 }
 
@@ -31,15 +35,19 @@ function trySpawn(cmd: string, args: string[]): Promise<number | null> {
   });
 }
 
-export async function openUrl(url: string): Promise<number> {
+export async function openUrl(
+  url: string,
+  opts: { quietFallback?: boolean } = {},
+): Promise<number> {
   if (!SAFE_URL.test(url)) throw usageError(`Refusing to open '${url}'`);
   const l = launcher();
   let code = await trySpawn(l.cmd, l.args(url));
   if (code === null && l.cmd === 'wslview')
     code = await trySpawn('xdg-open', [url]);
   if (code === null || code !== 0) {
-    process.stderr.write(`Open this URL in your browser: ${url}\n`);
-    return 0;
+    if (!opts.quietFallback)
+      process.stderr.write(`Open this URL in your browser: ${url}\n`);
+    return 1;
   }
   return code;
 }

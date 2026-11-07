@@ -22,6 +22,8 @@ import { isInteractive } from './ui/spinner';
 import { money } from './ui/format';
 import { detectLevel, makeTheme, useUnicode } from './ui/theme';
 import pkg from '../package.json';
+import { engageInputGuard, releaseInputGuard } from './ui/input-guard';
+import { interactiveLogin } from './commands/auth';
 
 import './commands/auth';
 import './commands/account';
@@ -31,6 +33,8 @@ import './commands/runtime';
 import './commands/prices';
 import './commands/meta';
 import './commands/tools';
+import './commands/deploy';
+import './commands/network';
 
 function commandNames(): string[] {
   return commands.map((c) => c.path.join(' '));
@@ -53,11 +57,11 @@ async function confirmDestructive(
       hint: CONFIRM_HINT,
     });
   const { text } = await import('./ui/prompts');
-    const typed = await text(
-      { message: `Type '${id}' to confirm` },
-      makeTheme(detectLevel(process.stderr), useUnicode()),
-    );
-    if (typed !== id) throw usageError('Confirmation did not match; aborted.');
+  const typed = await text(
+    { message: `Type '${id}' to confirm` },
+    makeTheme(detectLevel(process.stderr), useUnicode()),
+  );
+  if (typed !== id) throw usageError('Confirmation did not match; aborted.');
 }
 
 async function rootScreen(io: {
@@ -79,7 +83,7 @@ async function rootScreen(io: {
     const auth = resolveAuth(config, {});
     if (!auth.token || !isApiTokenFormat(auth.token)) {
       process.stdout.write(
-        `${theme.paint('muted', 'Not logged in. Run bitqate auth login to get started.')}\n\n`,
+        `  You're not logged in. Run ${theme.paint('strong', 'bitqate login')} to get started.\n\n`,
       );
     } else {
       try {
@@ -186,7 +190,7 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   const config = loadConfig();
-  const auth = resolveAuth(config, { profile: flags.profile });
+  let auth = resolveAuth(config, { profile: flags.profile });
 
   const io = {
     json: ioFlags.json,
@@ -198,18 +202,49 @@ export async function main(argv: string[]): Promise<number> {
   };
 
   let built: ApiClient | undefined;
+  if (io.interactive && !io.json && !flags['token-stdin']) engageInputGuard();
+
+  const canPromptLogin =
+    io.interactive && !io.json && !io.quiet && !flags['dry-run'];
+
+  const offerLogin = async (reason: string): Promise<boolean> => {
+    if (!canPromptLogin || auth.source === 'env') return false;
+    const { confirm } = await import('./ui/prompts');
+    process.stderr.write(
+      `${theme.paint('warning', theme.glyph('bang'))} ${reason}\n`,
+    );
+    const go = await confirm(
+      {
+        message: 'Log in now through your browser?',
+        label: 'Log in',
+        default: true,
+      },
+      theme,
+    );
+    if (!go) return false;
+    await interactiveLogin(auth.profile, theme);
+    process.stderr.write(
+      `${theme.paint('success', theme.glyph('check'))} Logged in\n\n`,
+    );
+    auth = resolveAuth(loadConfig(), { profile: flags.profile });
+    built = undefined;
+    return true;
+  };
+
+  if (command.scope !== null && !auth.token) {
+    await offerLogin("You're not logged in.");
+  }
+
   const api = (): ApiClient => {
     if (!built) {
       if (!auth.token)
-        throw new CliError(
-          'unauthenticated',
-          'No API token. Run `bitqate auth login` or set BITQATE_TOKEN.',
-        );
+        throw new CliError('unauthenticated', "You're not logged in.", {
+          hint: 'Run bitqate login (or set BITQATE_TOKEN in CI)',
+        });
       if (!isApiTokenFormat(auth.token))
-        throw new CliError(
-          'unauthenticated',
-          'The configured token is malformed. Expected bqat_<key_id>_<secret>.',
-        );
+        throw new CliError('unauthenticated', 'The stored login is invalid.', {
+          hint: 'Run bitqate login',
+        });
       built = new ApiClient({
         token: auth.token,
         verbose: io.verbose,
@@ -224,14 +259,28 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   try {
-    const result = await command.run({
-      api,
-      config,
-      auth,
-      args: positionals,
-      flags,
-      io,
-    });
+    const runOnce = () =>
+      command.run({
+        api,
+        config,
+        auth,
+        args: positionals,
+        flags,
+        io,
+      });
+    let result;
+    try {
+      result = await runOnce();
+    } catch (err) {
+      if (
+        err instanceof CliError &&
+        err.code === 'unauthenticated' &&
+        auth.source === 'profile' &&
+        (await offerLogin('Your login has expired or was revoked.'))
+      )
+        result = await runOnce();
+      else throw err;
+    }
     if (io.json) {
       const data =
         result.data &&
@@ -281,7 +330,11 @@ export async function run(argv: string[]): Promise<number> {
   try {
     return await main(argv);
   } catch (err) {
-    const theme = makeTheme(detectLevel(process.stderr), useUnicode());
+    releaseInputGuard();
+    const theme = makeTheme(
+      argv.includes('--no-color') ? 0 : detectLevel(process.stderr),
+      useUnicode(),
+    );
     if (err instanceof CliError) {
       printError(err, json, theme);
       return err.exitCode;
@@ -292,5 +345,7 @@ export async function run(argv: string[]): Promise<number> {
       theme,
     );
     return 1;
+  } finally {
+    releaseInputGuard();
   }
 }

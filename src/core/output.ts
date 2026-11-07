@@ -63,8 +63,8 @@ export function detailToLines(
     if (value === undefined || value === null || value === '') continue;
     const text =
       typeof value === 'object'
-          ? JSON.stringify(sanitizeDeep(value))
-          : sanitize(String(value));
+        ? JSON.stringify(sanitizeDeep(value))
+        : sanitize(String(value));
     lines.push(`  ${theme.paint('muted', label.padEnd(w))}  ${text}`);
   }
   if (tty && detail.hints?.length) {
@@ -114,7 +114,7 @@ export function printQuiet(data: unknown): void {
 
 export function errorHint(err: CliError): string | null {
   if (err.hint) return err.hint;
-  if (err.code === 'unauthenticated') return 'Run bitqate auth login';
+  if (err.code === 'unauthenticated') return 'Run bitqate login';
   if (err.code === 'forbidden') {
     const scope = /missing the (\S+) scope/.exec(err.message)?.[1];
     return `Create a token${scope ? ` with the ${scope} scope` : ''} at https://portal.bitqate.com/settings?tab=api`;

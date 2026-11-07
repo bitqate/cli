@@ -43,21 +43,31 @@ The bundle targets Node.js >= 20 and also runs under Bun.
 
 ## Quick start
 
-Create a token in the dashboard under **Settings → API tokens**, pick the
-scopes you need, then:
-
 ```sh
-bitqate auth login            # hidden prompt
-# or, for pipes and CI:
-printf '%s' "$TOKEN" | bitqate auth login --token-stdin
+bitqate login
 ```
 
-Then:
+That opens portal.bitqate.com in your browser, shows a one-time code, and
+asks you to approve this computer. No token to create or copy. Over SSH or
+anywhere without a browser, use `bitqate login --no-browser` and open the
+printed link on any device. The CLI gets its own token, valid for 90 days,
+which `bitqate logout` revokes. If a command needs a login and you aren't
+logged in, or the login expired, the CLI offers to log you in on the spot.
+
+Then deploy something:
 
 ```sh
-bitqate account
-bitqate vms list
-bitqate servers list
+bitqate deploy                       # pick: this folder, a popular app, a database, a game server, any image
+bitqate deploy --database postgres   # prints host, port, password and a connection string when ready
+bitqate vms create                   # a VPS, with an interactive wizard
+bitqate vms network dizzy-puma       # rDNS, DNS resolvers and IPv6 for a VPS
+```
+
+For CI and scripts, use an API token from **Settings → API tokens** instead:
+
+```sh
+printf '%s' "$TOKEN" | bitqate login --token-stdin
+# or set BITQATE_TOKEN
 ```
 
 On a terminal, most commands go further: `bitqate vms list` prints a table
@@ -74,7 +84,7 @@ $ bitqate vms stop dizzy-puma --wait
 ```
 
 Tokens are stored per profile in `~/.config/bitqate/config.json` (mode 0600).
-Manage them with `auth status`, `auth list`, `auth switch`, `auth logout`.
+Manage them with `auth status`, `auth list`, `auth switch`, `logout`.
 `BITQATE_TOKEN` always takes precedence over the stored profile.
 
 ## Token scopes
@@ -100,7 +110,7 @@ buying IP addresses, git connect/disconnect, and anything admin.
 
 ## Command reference
 
-Top level: `auth login|logout|status|list|switch`, `account`,
+Top level: `login`, `logout`, `deploy [path]`, `auth status|list|switch`, `account`,
 `workspaces list`, `transactions list`, `prices`, `schema`, `version`,
 `completion bash|zsh|fish`, `help <command>`.
 
@@ -115,14 +125,20 @@ vms      rename <id> <name> | auto-renew <id> on|off | renew <id>
 vms      reinstall <id> --os <id> | delete <id>        # destructive
 vms      backups list|create <id>
 vms      backups restore|delete <id> <token>          # destructive
-vms      networking <id> | rdns <id> --address <ip> --hostname <name>
+vms      network <id>                                  # interactive on a TTY
+vms      rdns <id> [--address <ip>] [--hostname <name> | --clear]
+vms      dns <id> [--address <ip>] [--servers cloudflare|google|quad9|"<ip> <ip>" | --reset]
+vms      ipv6 list|add <id> [--block <prefix>]
+vms      ipv6 rdns <id> --address <ip> [--hostname <name> | --clear]
+vms      ipv6 remove <id> --address <ip> ...                    # destructive
 vms      stats <id> [--range hour|day|week|month|year] [--cf AVERAGE|MAX]
 vms      wait <id> --status <s> [--wait-timeout <s>]
 
 servers  list | get <id> | regions
 servers  create --name <n> --region <daemonId> --memory-mb <n> --cpus <n>
                 --disk-gb <n>  plus exactly one of:
-                --image <ref> | --egg-url <url> | --dockerfile <path> | --git
+                --image <ref> | --database postgres|mysql|mongo|redis
+                | --egg-url <url> | --game <name> | --dockerfile <path> | --git
                 | --dir <path>
                 [--env K=V ...] [--startup <cmd>] [--workspace <id>]
                 [--wait] [--dry-run]
@@ -212,6 +228,13 @@ The CLI only talks to `https://api.bitqate.com`. No flag, environment variable o
 config key changes that, so a token is never sent anywhere else.
 
 ## Deploy local code
+
+Run `bitqate deploy` in your project folder. The first time, it asks whether
+to create a new server or use an existing one, then saves the choice in
+`.bitqate.json`, so later runs just upload and stream the build. With no
+Dockerfile, it detects the project type (Node.js, Python, Go, Rust, PHP,
+Ruby, Java, static sites) and offers to write one. Your app should listen on
+`0.0.0.0` and the `PORT` environment variable.
 
 `bitqate servers deploy <server> --dir .` packages a directory and deploys it the same way a push does, without going through GitHub. `servers create ... --dir . --wait` creates a server from local code in one step. Useful flags: `--dockerfile <path>` picks a Dockerfile inside the directory (default `Dockerfile`), `-m`/`--message <text>` sets the deployment message, and `--follow` streams the build logs.
 

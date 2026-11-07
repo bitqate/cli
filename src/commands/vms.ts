@@ -158,10 +158,7 @@ register({
       render: (v: any, ui) => {
         const hints: [string, string][] = [];
         if (!vmBusy(v.status))
-          hints.push([
-            `bitqate vms ssh ${v.name ?? v.id}`,
-            'connect over SSH',
-          ]);
+          hints.push([`bitqate vms ssh ${v.name ?? v.id}`, 'connect over SSH']);
         hints.push([`bitqate open ${v.name ?? v.id}`, 'open in the dashboard']);
         return {
           detail: {
@@ -731,74 +728,6 @@ register({
       render: (v, ui) => ({
         lines: [checkmark(ui, `Deleted backup of ${name}`)],
       }),
-    };
-  },
-});
-
-register({
-  path: ['vms', 'networking'],
-  summary: 'Show network addresses',
-  args: [{ name: 'id', required: false, description: 'VM name or ID' }],
-  flags: {},
-  scope: 'vms:read',
-  examples: ['bitqate vms networking dizzy-puma'],
-  async run(ctx) {
-    const { id } = await resolveVm(ctx);
-    const resp = await ctx.api().get(['vms', id, 'networking']);
-    const data = resp?.ips ?? resp;
-    return {
-      data,
-      render: (rows: any[]) => ({
-        table: {
-          columns: [
-            { title: 'Address' },
-            { title: 'Version', priority: 1 },
-            { title: 'CIDR', priority: 2 },
-            { title: 'rDNS', priority: 4 },
-          ],
-          rows: (Array.isArray(rows) ? rows : []).map((ip) => [
-            ip.address ?? ip.ip_address ?? '',
-            String(ip.version ?? ''),
-            String(ip.cidr ?? ''),
-            ip.rdns ?? '',
-          ]),
-        },
-      }),
-    };
-  },
-});
-
-register({
-  path: ['vms', 'rdns'],
-  summary: 'Set reverse DNS',
-  args: [{ name: 'id', required: false, description: 'VM name or ID' }],
-  flags: {
-    address: {
-      type: 'string',
-      placeholder: 'ip',
-      required: true,
-      description: 'IP address',
-    },
-    hostname: {
-      type: 'string',
-      placeholder: 'host',
-      required: true,
-      description: 'rDNS hostname',
-    },
-  },
-  scope: 'vms:write',
-  examples: [
-    'bitqate vms rdns dizzy-puma --address 203.0.113.10 --hostname mail.example.com',
-  ],
-  async run(ctx) {
-    const { id, name } = await resolveVm(ctx);
-    const resp = await ctx.api().put(['vms', id, 'networking', 'rdns'], {
-      address: ctx.flags.address,
-      rdns: ctx.flags.hostname,
-    });
-    return {
-      data: { id, rdns: resp?.rdns, dnsSynced: resp?.dnsSynced },
-      render: (v, ui) => ({ lines: [checkmark(ui, `Set rDNS for ${name}`)] }),
     };
   },
 });

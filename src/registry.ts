@@ -66,9 +66,17 @@ export interface Group {
 }
 
 export const groups: Group[] = [
-  { path: ['auth'], aliases: [], summary: 'Log in and manage tokens' },
-  { path: ['account'], aliases: ['whoami'], summary: 'Your account and balance' },
-  { path: ['vms'], aliases: ['vm'], summary: 'Create and manage virtual private servers' },
+  { path: ['auth'], aliases: [], summary: 'Profiles, tokens and logout' },
+  {
+    path: ['account'],
+    aliases: ['whoami'],
+    summary: 'Your account and balance',
+  },
+  {
+    path: ['vms'],
+    aliases: ['vm'],
+    summary: 'Create and manage virtual private servers',
+  },
   {
     path: ['servers'],
     aliases: ['server', 'srv'],

@@ -1,6 +1,7 @@
 import type { Readable, Writable } from 'node:stream';
 import { CliError } from '../core/errors';
 import type { Theme } from './theme';
+import { claimInput, guardEngaged } from './input-guard';
 
 export type Key =
   | { name: 'up' | 'down' | 'left' | 'right' | 'enter' | 'backspace' }
@@ -14,33 +15,99 @@ export function cancelled(): never {
   throw new CliError('cancelled', 'Cancelled.');
 }
 
-function parseKeys(chunk: Buffer, emit: (k: Key) => void): void {
-  const s = chunk.toString('utf8');
-  for (let i = 0; i < s.length; i++) {
-    const ch = s[i];
-    if (ch === '\x1b') {
-      const seq = s.slice(i, i + 3);
-      if (seq === '\x1b[A') emit({ name: 'up' });
-      else if (seq === '\x1b[B') emit({ name: 'down' });
-      else if (seq === '\x1b[C') emit({ name: 'right' });
-      else if (seq === '\x1b[D') emit({ name: 'left' });
-      else if (i + 1 >= s.length || s[i + 1] !== '[') emit({ name: 'cancel' });
-      if (seq.startsWith('\x1b[') && seq.length === 3) i += 2;
-      continue;
+const CSI_KEYS: Record<string, Key['name']> = {
+  A: 'up',
+  B: 'down',
+  C: 'right',
+  D: 'left',
+};
+
+export class KeyParser {
+  private pending = '';
+  private pasting = false;
+  private escTimer?: ReturnType<typeof setTimeout>;
+
+  constructor(private readonly emit: (k: Key) => void) {}
+
+  feed(chunk: Buffer | string): void {
+    if (this.escTimer) {
+      clearTimeout(this.escTimer);
+      this.escTimer = undefined;
     }
-    if (ch === '\x03' || ch === '\x04') {
-      emit({ name: 'cancel' });
-      continue;
+    const s = this.pending + chunk.toString();
+    this.pending = '';
+    let i = 0;
+    while (i < s.length) {
+      const ch = s[i];
+      if (ch === '\x1b') {
+        const used = this.escape(s, i);
+        if (used === 0) {
+          this.pending = s.slice(i);
+          this.escTimer = setTimeout(() => this.flushEscape(), 30);
+          return;
+        }
+        i += used;
+        continue;
+      }
+      this.plain(ch);
+      i++;
     }
-    if (ch === '\r' || ch === '\n') {
-      emit({ name: 'enter' });
-      continue;
+  }
+
+  private flushEscape(): void {
+    this.escTimer = undefined;
+    if (this.pending === '\x1b') this.emit({ name: 'cancel' });
+    this.pending = '';
+  }
+
+  private escape(s: string, i: number): number {
+    if (i + 1 >= s.length) return 0;
+    const next = s[i + 1];
+    if (next === '[') {
+      let j = i + 2;
+      while (j < s.length && s.charCodeAt(j) >= 0x30 && s.charCodeAt(j) <= 0x3f)
+        j++;
+      while (j < s.length && s.charCodeAt(j) >= 0x20 && s.charCodeAt(j) <= 0x2f)
+        j++;
+      if (j >= s.length) return 0;
+      const final = s[j];
+      const params = s.slice(i + 2, j);
+      if (final === '~' && params === '200') this.pasting = true;
+      else if (final === '~' && params === '201') this.pasting = false;
+      else if (!this.pasting) {
+        const key = CSI_KEYS[final];
+        if (key) this.emit({ name: key } as Key);
+      }
+      return j - i + 1;
     }
-    if (ch === '\x7f' || ch === '\x08') {
-      emit({ name: 'backspace' });
-      continue;
+    if (next === 'O') {
+      if (i + 2 >= s.length) return 0;
+      const key = CSI_KEYS[s[i + 2]];
+      if (key && !this.pasting) this.emit({ name: key } as Key);
+      return 3;
     }
-    if (ch >= ' ') emit({ name: 'char', ch });
+    if (next === '\x1b') {
+      if (!this.pasting) this.emit({ name: 'cancel' });
+      return 1;
+    }
+    return 2;
+  }
+
+  private plain(ch: string): void {
+    if (this.pasting) {
+      if (ch >= ' ' && ch !== '\x7f') this.emit({ name: 'char', ch });
+      return;
+    }
+    if (ch === '\x03' || ch === '\x04') this.emit({ name: 'cancel' });
+    else if (ch === '\r' || ch === '\n') this.emit({ name: 'enter' });
+    else if (ch === '\x7f' || ch === '\x08') this.emit({ name: 'backspace' });
+    else if (ch >= ' ') this.emit({ name: 'char', ch });
+  }
+
+  close(): void {
+    if (this.escTimer) clearTimeout(this.escTimer);
+    this.escTimer = undefined;
+    this.pending = '';
   }
 }
 
@@ -51,11 +118,18 @@ export interface PromptIO {
 
 class KeyReader {
   private onData: (b: Buffer) => void;
+  private parser: KeyParser;
+  private release?: () => void;
+  private closed = false;
   constructor(
     private readonly io: PromptIO,
     emit: (k: Key) => void,
   ) {
-    this.onData = (b: Buffer) => parseKeys(b, emit);
+    this.parser = new KeyParser((k) => {
+      if (!this.closed) emit(k);
+    });
+    this.onData = (b: Buffer) => this.parser.feed(b);
+    if (io.input === process.stdin) this.release = claimInput();
     const anyInput = io.input as any;
     if (anyInput.setRawMode) anyInput.setRawMode(true);
     if (anyInput.resume) anyInput.resume();
@@ -63,27 +137,47 @@ class KeyReader {
   }
 
   close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.parser.close();
     const anyInput = this.io.input as any;
     this.io.input.off('data', this.onData);
+    if (this.release) {
+      this.release();
+      if (guardEngaged()) return;
+    }
     if (anyInput.setRawMode) anyInput.setRawMode(false);
     if (anyInput.pause) anyInput.pause();
   }
 }
 
+const ANSI = new RegExp('\\x1b\\[[0-9;?]*[A-Za-z]', 'g');
+
+function visualRows(line: string, columns: number): number {
+  const width = line.replace(ANSI, '').length;
+  return Math.max(1, Math.ceil(width / Math.max(1, columns)));
+}
+
 class Frame {
-  lines = 0;
+  rows = 0;
   constructor(private readonly io: PromptIO) {}
+
+  private columns(): number {
+    const cols = (this.io.output as any).columns;
+    return typeof cols === 'number' && cols > 0 ? cols : 80;
+  }
 
   write(lines: string[]) {
     this.clear();
     this.io.output.write(`${lines.join('\n')}\n`);
-    this.lines = lines.length;
+    const cols = this.columns();
+    this.rows = lines.reduce((n, l) => n + visualRows(l, cols), 0);
   }
 
   clear() {
-    if (!this.lines) return;
-    this.io.output.write(`\x1b[${this.lines}F\x1b[J`);
-    this.lines = 0;
+    if (!this.rows) return;
+    this.io.output.write(`\x1b[${this.rows}A\r\x1b[J`);
+    this.rows = 0;
   }
 }
 
@@ -96,19 +190,17 @@ export interface SelectOption<T = string> {
 export interface SelectOpts<T = string> {
   message: string;
   label?: string;
+  initial?: number;
   options: SelectOption<T>[];
   io?: PromptIO;
 }
 
-export function select<T>(
-  opts: SelectOpts<T>,
-  theme: Theme,
-): Promise<T> {
+export function select<T>(opts: SelectOpts<T>, theme: Theme): Promise<T> {
   const io = opts.io ?? { input: process.stdin, output: process.stderr };
   const filterable = opts.options.length > 7;
   const frame = new Frame(io);
-  let index = 0;
-  let offset = 0;
+  let index = Math.max(0, Math.min(opts.initial ?? 0, opts.options.length - 1));
+  let offset = index >= 8 ? index - 7 : 0;
   let filter = '';
   const filtered = () =>
     filter
@@ -167,9 +259,10 @@ export function select<T>(
     }
     if (k.name === 'up') index = Math.max(0, index - 1);
     else if (k.name === 'down') index = Math.min(list.length - 1, index + 1);
-    else if (k.name === 'char' && k.ch === 'j')
+    else if (k.name === 'char' && !filterable && k.ch === 'j')
       index = Math.min(list.length - 1, index + 1);
-    else if (k.name === 'char' && k.ch === 'k') index = Math.max(0, index - 1);
+    else if (k.name === 'char' && !filterable && k.ch === 'k')
+      index = Math.max(0, index - 1);
     else if (k.name === 'char' && filterable) {
       filter += k.ch;
       index = 0;

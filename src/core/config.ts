@@ -15,6 +15,7 @@ import { join } from 'node:path';
 
 export interface ProfileEntry {
   token?: string;
+  via?: 'browser' | 'token';
 }
 
 export interface CliConfig {
