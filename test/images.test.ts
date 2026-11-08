@@ -30,4 +30,34 @@ describe('database catalog', () => {
     );
     expect(connectionString(redis, 'h', 1, {})).toBe('redis://h:1');
   });
+
+  test('asks for TLS when the database offers it', () => {
+    const pg = findDatabase('postgres')!;
+    const creds = { username: 'postgres', password: 'pw', db: 'app' };
+    expect(connectionString(pg, 'h', 1, { ...creds, tls: 'preferred' })).toBe(
+      'postgresql://postgres:pw@h:1/app?sslmode=require',
+    );
+    expect(connectionString(pg, 'h', 1, { ...creds, tls: 'off' })).toBe(
+      'postgresql://postgres:pw@h:1/app',
+    );
+    expect(
+      connectionString(findDatabase('mysql')!, 'h', 1, {
+        password: 'pw',
+        tls: 'required',
+      }),
+    ).toBe('mysql://root:pw@h:1/?ssl-mode=REQUIRED');
+    expect(
+      connectionString(findDatabase('mongo')!, 'h', 1, {
+        password: 'pw',
+        tls: 'preferred',
+      }),
+    ).toBe('mongodb://root:pw@h:1/?tls=true');
+    const redis = findDatabase('redis')!;
+    expect(
+      connectionString(redis, 'h', 1, { password: 'x', tls: 'required' }),
+    ).toBe('rediss://:x@h:1');
+    expect(connectionString(redis, 'h', 1, { password: 'x', tls: 'off' })).toBe(
+      'redis://:x@h:1',
+    );
+  });
 });

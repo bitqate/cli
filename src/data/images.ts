@@ -176,5 +176,18 @@ export function connectionString(
   const name =
     creds.db ?? creds.database ?? (db.engine === 'postgres' ? 'postgres' : '');
   const path = db.engine === 'redis' ? '' : name ? `/${name}` : '';
-  return `${db.scheme}://${db.engine === 'redis' ? redisAuth : auth}${host}:${port}${path}`;
+
+  const tls = creds.tls === 'preferred' || creds.tls === 'required';
+  const scheme =
+    db.engine === 'redis' && creds.tls === 'required' ? 'rediss' : db.scheme;
+  const query = !tls
+    ? ''
+    : db.engine === 'postgres'
+      ? '?sslmode=require'
+      : db.engine === 'mysql'
+        ? `${path ? '' : '/'}?ssl-mode=REQUIRED`
+        : db.engine === 'mongo'
+          ? `${path ? '' : '/'}?tls=true`
+          : '';
+  return `${scheme}://${db.engine === 'redis' ? redisAuth : auth}${host}:${port}${path}${query}`;
 }
