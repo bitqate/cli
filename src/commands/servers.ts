@@ -569,8 +569,6 @@ register({
       database = w.database;
     }
 
-    // Settings read from fly.toml, render.yaml, railway.* or a Procfile by
-    // `bitqate deploy`. Their env sits under anything the user passed.
     const platform = ctx.flags.__platform as
       | { appPort?: number; dataPath?: string; env: Record<string, string> }
       | null

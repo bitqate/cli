@@ -4,9 +4,6 @@ import { parse as parseYaml } from 'yaml';
 import { parseDotenv } from './dotenv';
 import { usageError } from './errors';
 
-// Turns a Compose document into a plan of BitQate servers. Pure: callers
-// provide the directory and the merged env used for interpolation.
-
 export type ServiceKind = 'database' | 'build' | 'image';
 
 export interface PlannedService {
@@ -72,22 +69,19 @@ export function loadComposeEnv(
   return { ...out, ...processEnv } as Record<string, string>;
 }
 
-// ${VAR}, ${VAR:-d}, ${VAR-d}, $VAR interpolation; $$ stays a literal $.
 export function interpolate(
   value: string,
   env: Record<string, string>,
 ): string {
-  return value
-    .replace(/\$\$/g, '\x00')
-    .replace(
-      /\$\{([A-Za-z_][A-Za-z0-9_]*)(:-|-|)([^}]*)\}/g,
-      (_m, k, op, dflt) => {
-        const v = env[k];
-        return v !== undefined && v !== '' ? v : dflt;
-      },
-    )
-    .replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (_m, k) => env[k] ?? '')
-    .replace(/\x00/g, '$');
+  return value.replace(
+    /\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)(:-|-|)([^}]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g,
+    (m, k, _op, dflt, bare) => {
+      if (m === '$$') return '$';
+      if (bare !== undefined) return env[bare] ?? '';
+      const v = env[k];
+      return v !== undefined && v !== '' ? v : dflt;
+    },
+  );
 }
 
 function envOf(
@@ -294,7 +288,6 @@ export function planCompose(
     }
   }
 
-  // Topological order: databases first, then depends_on order.
   const byName = new Map(services.map((s) => [s.name, s]));
   const order: PlannedService[] = [];
   const seen = new Set<string>();
@@ -334,8 +327,6 @@ export function planCompose(
   };
 }
 
-// Rewrites <db>:<defaultPort> inside the other services' env to the assigned
-// ports once database servers exist. Bare DB_PORT-like values are warned.
 export function rewriteDbPorts(
   services: PlannedService[],
   assigned: Map<string, number>,
@@ -352,7 +343,6 @@ export function rewriteDbPorts(
       for (const [svcName, port] of assigned) {
         const dflt =
           DB_PORTS[services.find((x) => x.name === svcName)?.engine ?? ''] ?? 0;
-        // <composeName>:<defaultPort> -> <hostname>:<assignedPort>
         if (dflt) {
           const re = new RegExp(`\\b${esc(svcName)}:${dflt}\\b`, 'g');
           if (re.test(val)) {
@@ -360,7 +350,6 @@ export function rewriteDbPorts(
             continue;
           }
         }
-        // bare whole-value host reference -> hostname
         if (val.trim() === svcName && svcName !== hostOf.get(svcName)) {
           val = rename(svcName);
           continue;
@@ -375,7 +364,6 @@ export function rewriteDbPorts(
           );
         }
       }
-      // hostname renames for non-DB services inside <name>:<port> values
       for (const [other, host] of hostOf) {
         if (other === host) continue;
         val = val.replace(

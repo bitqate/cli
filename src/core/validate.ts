@@ -86,8 +86,6 @@ export function positiveInt(value: string, flag: string): number {
 import { readFileSync } from 'node:fs';
 import { parseDotenv } from './dotenv';
 
-// Merges --env-file values (dotenv files, applied in order) under explicit
-// --env KEY=VALUE pairs, which always win.
 export function envFromFilesAndFlags(
   files: string[] | undefined,
   pairs: string[] | undefined,

@@ -20,10 +20,6 @@ function unescapeDq(s: string): string {
   return out;
 }
 
-// Parses a dotenv file. Supports `export `, comment lines, inline ` #`
-// comments on unquoted values, single-quoted literals, double-quoted
-// escapes (\n \t \" \\) spanning multiple lines, trimmed unquoted values
-// and empty values.
 export function parseDotenv(text: string): Record<string, string> {
   const out: Record<string, string> = {};
   const lines = text.split(/\r?\n/);
@@ -48,7 +44,6 @@ export function parseDotenv(text: string): Record<string, string> {
       continue;
     }
     if (rest.startsWith('"')) {
-      // Scan for the closing quote, continuing onto following lines.
       let value = rest.slice(1);
       let closed = false;
       for (;;) {
@@ -70,7 +65,6 @@ export function parseDotenv(text: string): Record<string, string> {
   return out;
 }
 
-// Index of the first unescaped '"' in s, or -1.
 function findClosingQuote(s: string): number {
   for (let i = 0; i < s.length; i++) {
     if (s[i] === '\\') {

@@ -279,9 +279,6 @@ register({
     }
     if (!st.isDirectory()) throw usageError(`Not a folder: ${dir}`);
 
-    // Compose mode: --compose / --compose-file, or auto-detected compose
-    // file on a TTY when there is no single-server link. Runs the project
-    // executor and returns before the single-server flow.
     let composeFile: string | null = null;
     if (ctx.flags.compose || ctx.flags['compose-file']) {
       composeFile = ctx.flags['compose-file']
@@ -306,9 +303,6 @@ register({
       return await runCompose(ctx, dir, composeFile);
     }
 
-    // Settings from fly.toml, render.yaml, railway.* or Procfile. Only read
-    // for folders not yet linked to a server; they're applied when a new
-    // server is created below.
     let platform =
       ctx.flags['no-platform-config'] || link || ctx.flags.server
         ? null

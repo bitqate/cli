@@ -3,10 +3,6 @@ import path from 'path';
 import { parse as parseToml } from 'smol-toml';
 import { parse as parseYaml } from 'yaml';
 
-// Reads a folder for platform config files (fly.toml, render.yaml,
-// railway.json/toml, Procfile) and normalizes them into the settings
-// `bitqate deploy` can apply when creating a server.
-
 export interface ImportedConfig {
   source:
     | 'fly.toml'
@@ -140,7 +136,6 @@ function parseRender(text: string): ImportedConfig {
       cfg.needsManualEnv.push(String(v.key));
     }
   }
-  // Render injects PORT (default 10000); BitQate does too — no appPort.
   return cfg;
 }
 
@@ -150,7 +145,6 @@ function parseRailway(doc: any): ImportedConfig {
   cfg.startCommand = str(doc?.deploy?.startCommand);
   const hc = str(doc?.deploy?.healthcheckPath);
   if (hc) cfg.healthCheck = { type: 'http', path: hc };
-  // Railway injects PORT as well — no appPort.
   return cfg;
 }
 
@@ -173,8 +167,6 @@ const num = (v: unknown): number | undefined => {
 const str = (v: unknown): string | undefined =>
   typeof v === 'string' && v.trim() ? v.trim() : undefined;
 
-// Compact human summary of an imported config. When `oneLine`, returns a
-// single parenthetical string for the non-TTY notice.
 export function platformSummary(
   c: ImportedConfig,
   oneLine = false,

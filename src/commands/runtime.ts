@@ -360,8 +360,6 @@ register({
   },
 });
 
-// ---------- app settings (git deployments) ----------
-
 function appLines(d: any, ui: any): Renderable {
   const customPort = d.appPort !== null && d.appPort !== undefined;
   const customPath = d.dataPath !== null && d.dataPath !== undefined;
@@ -453,8 +451,6 @@ register({
   },
 });
 
-// ---------- database import ----------
-
 function importLines(d: any, ui: any): Renderable {
   const lines: string[] = [];
   if (d.lines?.length) lines.push(...d.lines.slice(-40));
@@ -527,8 +523,6 @@ register({
     }
     if (!url) throw usageError('Pass --from-url <url> or --from-url-stdin');
 
-    // Redis imports always replace the whole dataset (replication has no
-    // merge), so the API requires --replace for them.
     if (ctx.flags.replace) {
       await confirmDestroy(ctx, `${name} (replace)`);
     }
@@ -550,7 +544,6 @@ register({
       };
     }
 
-    // Follow progress until the job settles.
     let offset = 0;
     for (;;) {
       const data = await ctx

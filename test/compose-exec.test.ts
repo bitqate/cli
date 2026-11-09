@@ -60,7 +60,6 @@ describe('serviceBody', () => {
   });
 });
 
-// Minimal RunContext fake with an api() stub recording calls.
 function fakeCtx(
   calls: string[],
   opts: { failNet?: boolean; failSecond?: boolean } = {},
@@ -132,7 +131,6 @@ describe('runCompose happy path', () => {
     );
     const creates = calls.filter((c) => c.startsWith('POST servers'));
     expect(creates.length).toBe(3);
-    // app create carries rewritten DATABASE_URL (assigned port 26401)
     const appCreate = creates.find((c) => c.includes('"name":"api"'))!;
     expect(appCreate).toContain('db:26401');
     expect(appCreate).toContain('"appPort":3000');

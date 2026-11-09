@@ -1,6 +1,3 @@
-// bitqate deploy --compose: deploy a multi-service Compose file as one
-// project. Database services are created first so their assigned ports can
-// be rewritten into the other services' env values.
 import fs from 'fs';
 import path from 'path';
 import { parse as parseYaml } from 'yaml';
@@ -50,9 +47,6 @@ export function writeComposeLink(dir: string, link: ComposeLink) {
   );
 }
 
-// Managed image for a database engine: keep an explicit tag (postgres:16),
-// otherwise use the curated image (postgres:latest would drift to a major
-// we don't ship tooling for).
 export function databaseImage(s: PlannedService): string {
   const entry = DATABASES.find((d) => d.engine === s.engine);
   const img = String(s.image ?? '');
@@ -60,8 +54,6 @@ export function databaseImage(s: PlannedService): string {
   return tagged ? img : (entry?.image ?? img);
 }
 
-// The create body for one planned service, plus the extra ports that must
-// be PUT after create (the create body has no ports field).
 export function serviceBody(
   s: PlannedService,
   opts: { region: string },
@@ -70,7 +62,7 @@ export function serviceBody(
     name: s.name,
     daemonId: opts.region,
     ram: s.memoryMb,
-    cpu: Math.round(s.cpu * 100), // create wants units (100 = 1 core)
+    cpu: Math.round(s.cpu * 100),
     disk: s.diskGb,
     variables: s.env,
   };
@@ -161,7 +153,6 @@ export async function runCompose(
 
   const link = readComposeLink(dir);
 
-  // Re-run on a linked compose dir: re-upload build services only.
   if (link) {
     const { packageDir, uploadPackage } = await import('./servers');
     const out: string[] = [];
@@ -191,16 +182,13 @@ export async function runCompose(
       await uploadPackage(ctx, cur.id, pkg);
       out.push(`${s.name}: re-uploaded to ${cur.name}`);
     }
-    out.forEach((l) => console.error(l));
+    for (const l of out) console.error(l);
     return {
       data: { ok: true, reUpload: true },
       render: () => ({ lines: out }),
     };
   }
 
-  // Region: --region or the daemon picker; non-TTY without it fails.
-  // Dry-run with an explicit --region skips the API lookup entirely so it
-  // works without a token.
   const region =
     ctx.flags['dry-run'] && ctx.flags.region
       ? String(ctx.flags.region)
@@ -218,9 +206,7 @@ export async function runCompose(
   try {
     const p = await ctx.api().get(['prices']);
     prices = priceMap(p?.prices ?? []);
-  } catch {
-    /* prices are nice-to-have */
-  }
+  } catch {}
 
   const allWarnings = [
     ...plan.warnings,
@@ -321,7 +307,6 @@ export async function runCompose(
       const id = String(r?.id ?? '');
       if (!id) throw new CliError('server', `Could not create ${s.name}`);
       created.push({ name: s.name, id });
-      // Poll for the assigned port (up to 60s) so env can be rewritten.
       const deadline = Date.now() + 60_000;
       for (;;) {
         const info = await ctx.api().get(['servers', id]);
@@ -461,7 +446,7 @@ export async function runCompose(
   } catch (e) {
     if (created.length) {
       process.stderr.write('Failed partway through. Created so far:\n');
-      failList().forEach((l) => process.stderr.write(sanitize(l) + '\n'));
+      for (const l of failList()) process.stderr.write(`${sanitize(l)}\n`);
     }
     throw e;
   }
