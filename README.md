@@ -99,9 +99,9 @@ and `bitqate schema` lists all of them for agents).
 | `vms:power` | `vms start/stop/restart` | |
 | `vms:write` | `vms create/resize/rename/auto-renew/renew/rdns`, `vms backups create` | **can charge your balance** |
 | `vms:delete` | `vms delete/reinstall`, `vms backups restore/delete` | **destroys data** |
-| `servers:read` | `servers list/get/install-state/logs`, `servers backups list`, `servers deployments list/get/logs`, `servers health get`, `servers network get` | read-only |
+| `servers:read` | `servers list/get/install-state/logs`, `servers backups list`, `servers deployments list/get/logs`, `servers health get`, `servers app get`, `servers db import-status`, `servers network get` | read-only |
 | `servers:power` | `servers start/stop/restart` | |
-| `servers:write` | `servers create/renew/auto-renew/rename/resize/ports/startup/deploy`, `servers backups create`, `servers deployments redeploy/rollback`, `servers health set/clear`, `servers network enable/disable` | **can charge your balance** |
+| `servers:write` | `servers create/renew/auto-renew/rename/resize/ports/startup/deploy`, `servers backups create`, `servers deployments redeploy/rollback`, `servers health set/clear`, `servers app set`, `servers db import`, `servers network enable/disable` | **can charge your balance** |
 | `servers:delete` | `servers delete/reinstall`, `servers backups restore/delete` | **destroys data** |
 | any valid token | `prices`, `vms nodes`, `vms os`, `servers regions`, `auth status` | catalog endpoints |
 
@@ -158,6 +158,12 @@ servers  logs <id> [-f] [--tail <n>] [--since 10m|<date>] [-t]
 servers  health get <id> | clear <id>
 servers  health set <id> [--type http|tcp] [--path /healthz] [--interval <s>]
                 [--timeout <s>] [--failures <n>] [--grace <s>] [--no-restart]
+servers  app get <id>
+servers  app set <id> [--port <n>] [--data-path <path>]
+                [--reset-port] [--reset-data-path]
+servers  db import <id> (--from-url <url> | --from-url-stdin)
+                [--database <name>] [--replace] [--no-follow]
+servers  db import-status <id> <jobId>
 servers  network get <id> | enable <id> [--hostname <name>] | disable <id>
 ```
 
@@ -170,6 +176,9 @@ to retry a failed build (default: the newest deployment).
 `health set` makes git deploys wait for the check before switching traffic,
 restores the previous version when a deploy never passes it, and restarts a
 running server that keeps failing (at most 3 times an hour).
+`app set` changes the port a git-deployed app listens on inside the container
+(default 8000, set via `PORT`) and the path its persistent volume is mounted
+at (default `/app/data`), applying on the next deploy or restart.
 `network enable` puts the server on its workspace's private network: servers
 on the same node reach each other at `<hostname>.internal`, from the
 server's next restart.

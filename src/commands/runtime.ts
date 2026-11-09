@@ -1,6 +1,6 @@
 import { CliError, usageError } from '../core/errors';
 import { followDeployment } from './deploy-follow';
-import { waitPoll } from '../core/confirm';
+import { confirmDestroy, waitPoll } from '../core/confirm';
 import { resolveResource } from '../core/resolve';
 import { sanitize } from '../core/output';
 import { positiveInt } from '../core/validate';
@@ -357,6 +357,235 @@ register({
         lines: [checkmark(ui, `Removed the health check from ${name}`)],
       }),
     };
+  },
+});
+
+// ---------- app settings (git deployments) ----------
+
+function appLines(d: any, ui: any): Renderable {
+  const customPort = d.appPort !== null && d.appPort !== undefined;
+  const customPath = d.dataPath !== null && d.dataPath !== undefined;
+  const detail: [string, string][] = [
+    [
+      'App port',
+      `${d.effectivePort ?? 8000}${customPort ? '' : ' (default)'}`,
+    ],
+    [
+      'Data path',
+      `${d.effectiveDataPath ?? '/app/data'}${customPath ? '' : ' (default)'}`,
+    ],
+  ];
+  return { detail: { title: 'App settings', fields: detail } };
+}
+
+register({
+  path: ['servers', 'app', 'get'],
+  summary: 'Show the app port and data path (git deploys)',
+  args: [{ name: 'id', required: false, description: 'Server name or ID' }],
+  flags: {},
+  scope: 'servers:read',
+  aliases: ['show', 'info'],
+  examples: ['bitqate servers app get api'],
+  async run(ctx) {
+    const { id } = await resolveSrv(ctx);
+    const data = await ctx.api().get(['servers', id, 'app-settings']);
+    return { data, render: appLines };
+  },
+});
+
+register({
+  path: ['servers', 'app', 'set'],
+  summary: 'Set the app port and data path (git deploys)',
+  description:
+    'The port your app listens on inside the container (PORT is set to it) ' +
+    'and the path its persistent volume is mounted at. Changes apply on the ' +
+    'next deploy or restart.',
+  args: [{ name: 'id', required: false, description: 'Server name or ID' }],
+  flags: {
+    port: {
+      type: 'string',
+      placeholder: 'n',
+      description: 'Container port the app listens on (1-65535)',
+    },
+    'data-path': {
+      type: 'string',
+      placeholder: 'path',
+      description: 'Container path the persistent volume mounts at',
+    },
+    'reset-port': {
+      type: 'boolean',
+      description: 'Restore the default port (8000)',
+    },
+    'reset-data-path': {
+      type: 'boolean',
+      description: 'Restore the default data path (/app/data)',
+    },
+  },
+  scope: 'servers:write',
+  examples: [
+    'bitqate servers app set api --port 3000',
+    'bitqate servers app set api --data-path /data',
+    'bitqate servers app set api --reset-port',
+  ],
+  async run(ctx) {
+    const { id, name } = await resolveSrv(ctx);
+    const body: Record<string, number | string | null> = {};
+    if (ctx.flags['reset-port']) body.appPort = null;
+    else if (ctx.flags.port !== undefined)
+      body.appPort = positiveInt(String(ctx.flags.port), '--port');
+    if (ctx.flags['reset-data-path']) body.dataPath = null;
+    else if (ctx.flags['data-path'] !== undefined)
+      body.dataPath = String(ctx.flags['data-path']);
+    if (Object.keys(body).length === 0)
+      throw usageError(
+        'Nothing to change: pass --port, --data-path, --reset-port or --reset-data-path',
+      );
+    const data = await ctx.api().put(['servers', id, 'app-settings'], body);
+    return {
+      data: { id, ...data },
+      render: (_d, ui) => ({
+        lines: [
+          checkmark(ui, `App settings for ${name} saved`),
+          ui.theme.paint(
+            'muted',
+            `App port ${data?.effectivePort ?? 8000} · data path ${data?.effectiveDataPath ?? '/app/data'} - applies on the next deploy or restart`,
+          ),
+        ],
+      }),
+    };
+  },
+});
+
+// ---------- database import ----------
+
+function importLines(d: any, ui: any): Renderable {
+  const lines: string[] = [];
+  if (d.lines?.length) lines.push(...d.lines.slice(-40));
+  lines.push(`status: ${d.status}`);
+  if (d.summary?.items?.length) {
+    lines.push('', 'Source vs target row counts:');
+    for (const i of d.summary.items) {
+      const mark =
+        i.source === null || i.target === null
+          ? '?'
+          : i.source === i.target
+            ? '✓'
+            : '✗';
+      lines.push(
+        `  ${mark} ${sanitize(i.name)}  source=${i.source ?? 'n/a'} target=${i.target ?? 'n/a'}`,
+      );
+    }
+  }
+  return { lines };
+}
+
+function importStatus(d: any): void {
+  if (d.status === 'failed') {
+    throw new CliError('server', 'The import failed (see log above)');
+  }
+}
+
+register({
+  path: ['servers', 'db', 'import'],
+  summary: 'Import a database from a connection string',
+  description:
+    'Copies data into the database server from a provider connection ' +
+    'string (postgres://, mysql://, mongodb://, redis://). Streams the ' +
+    'progress; --no-follow returns immediately with the job id.',
+  args: [{ name: 'id', required: false, description: 'Server name or ID' }],
+  flags: {
+    'from-url': {
+      type: 'string',
+      placeholder: 'url',
+      description: 'Connection string of the source database',
+    },
+    'from-url-stdin': {
+      type: 'boolean',
+      description: 'Read the connection string from stdin',
+    },
+    database: {
+      type: 'string',
+      placeholder: 'name',
+      description: 'Target database/schema name (default: server default)',
+    },
+    replace: {
+      type: 'boolean',
+      description: 'Drop existing data in the target first',
+    },
+    'no-follow': { type: 'boolean', description: 'Do not stream progress' },
+  },
+  scope: 'servers:write',
+  destructive: true,
+  examples: [
+    'bitqate servers db import pg --from-url postgres://u:p@host:5432/db',
+    'bitqate servers db import mongo --from-url-stdin --replace -y',
+  ],
+  async run(ctx) {
+    const { id, name } = await resolveSrv(ctx);
+    let url = ctx.flags['from-url'];
+    if (ctx.flags['from-url-stdin']) {
+      const chunks: Buffer[] = [];
+      for await (const c of process.stdin) chunks.push(c as Buffer);
+      url = Buffer.concat(chunks).toString('utf-8').trim();
+    }
+    if (!url) throw usageError('Pass --from-url <url> or --from-url-stdin');
+
+    // Redis imports always replace the whole dataset (replication has no
+    // merge), so the API requires --replace for them.
+    if (ctx.flags.replace) {
+      await confirmDestroy(ctx, `${name} (replace)`);
+    }
+
+    const resp = await ctx.api().post(['servers', id, 'database', 'import'], {
+      source: { type: 'url', url },
+      targetDatabase: ctx.flags.database,
+      replace: !!ctx.flags.replace,
+    });
+    const jobId = resp?.jobId;
+    if (!jobId) throw new CliError('server', 'The import could not start');
+
+    if (ctx.flags['no-follow'] || ctx.io.json) {
+      return { data: { id, jobId }, render: (d, ui) => ({
+        lines: [checkmark(ui, `Import ${d.jobId} started on ${name}`)],
+      }) };
+    }
+
+    // Follow progress until the job settles.
+    let offset = 0;
+    for (;;) {
+      const data = await ctx
+        .api()
+        .get(['servers', id, 'database', 'import', jobId]);
+      const lines: string[] = data?.lines ?? [];
+      for (const l of lines.slice(offset))
+        process.stderr.write(`${l}\n`);
+      offset = lines.length;
+      if (data?.status !== 'running') {
+        importStatus(data);
+        return { data, render: importLines };
+      }
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  },
+});
+
+register({
+  path: ['servers', 'db', 'import-status'],
+  summary: 'Show a database import job',
+  args: [
+    { name: 'id', required: false, description: 'Server name or ID' },
+    { name: 'jobId', required: true, description: 'Import job ID' },
+  ],
+  flags: {},
+  scope: 'servers:read',
+  examples: ['bitqate servers db import-status pg 8f2e1c'],
+  async run(ctx) {
+    const { id } = await resolveSrv(ctx);
+    const data = await ctx
+      .api()
+      .get(['servers', id, 'database', 'import', ctx.args[1]]);
+    importStatus(data);
+    return { data, render: importLines };
   },
 });
 
