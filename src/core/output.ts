@@ -10,6 +10,20 @@ export function sanitize(value: string): string {
   return value.replace(C0_C1, '');
 }
 
+const SGR = new RegExp('\\x1b\\[[0-9;]*m', 'g');
+const OTHER_ESC = new RegExp(
+  '\\x1b(?:\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)|\\[[0-9;?]*[a-zA-Z]|.)',
+  'g',
+);
+
+export function sanitizeStyled(value: string): string {
+  const parts = value.split(SGR);
+  const seqs = value.match(SGR) ?? [];
+  return parts
+    .map((part, i) => sanitize(part.replace(OTHER_ESC, '')) + (seqs[i] ?? ''))
+    .join('');
+}
+
 export function sanitizeDeep(value: unknown): unknown {
   if (typeof value === 'string') return sanitize(value);
   if (Array.isArray(value)) return value.map(sanitizeDeep);
@@ -95,7 +109,7 @@ export function printRenderable(
     return;
   }
   for (const line of renderable.lines)
-    process.stdout.write(`${sanitize(line)}\n`);
+    process.stdout.write(`${sanitizeStyled(line)}\n`);
 }
 
 export function printJson(data: unknown): void {
