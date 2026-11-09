@@ -26,6 +26,7 @@ export function rootFiles(dir: string): string[] {
 export async function suggestDockerfile(
   ctx: RunContext,
   dir: string,
+  startCommand?: string,
 ): Promise<DockerfileSuggestion | null> {
   const files = rootFiles(dir);
   let packageJson: unknown;
@@ -36,9 +37,11 @@ export async function suggestDockerfile(
     } catch {}
   }
   try {
-    const resp = await ctx
-      .api()
-      .post(['dockerfile'], { files, package_json: packageJson });
+    const resp = await ctx.api().post(['dockerfile'], {
+      files,
+      package_json: packageJson,
+      ...(startCommand ? { start_command: startCommand } : {}),
+    });
     if (typeof resp?.dockerfile !== 'string') return null;
     return {
       stack: String(resp.stack ?? 'generic'),
@@ -54,6 +57,7 @@ export async function ensureDockerfile(
   ctx: RunContext,
   dir: string,
   relPath: string,
+  startCommand?: string,
 ): Promise<void> {
   const abs = path.resolve(dir, relPath);
   if (existsSync(abs)) return;
@@ -67,7 +71,7 @@ export async function ensureDockerfile(
     });
   }
   const suggestion = await task('Looking at your project', theme, () =>
-    suggestDockerfile(ctx, dir),
+    suggestDockerfile(ctx, dir, startCommand),
   );
   if (!suggestion || suggestion.stack === 'generic') {
     throw new CliError(

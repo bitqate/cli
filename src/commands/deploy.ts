@@ -1,7 +1,9 @@
-import { readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { CliError, usageError } from '../core/errors';
 import { ensureDockerfile } from '../core/dockerfile';
+import { detectPlatformConfig, platformSummary } from '../core/platform-config';
+import { runCompose, findComposeFile, readComposeLink } from './compose';
 import { isRenderable, sanitize, type Renderable } from '../core/output';
 import { resolveResource } from '../core/resolve';
 import {
@@ -10,7 +12,7 @@ import {
   type CommandResult,
   type RunContext,
 } from '../registry';
-import { select } from '../ui/prompts';
+import { confirm, select } from '../ui/prompts';
 import { task } from '../ui/spinner';
 import { pickSource, type PickedSource } from '../wizards/server';
 import { resolveDeployDockerfile } from './servers';
@@ -177,6 +179,23 @@ register({
       multiple: true,
       description: 'Read env vars from a dotenv file (repeatable)',
     },
+    'no-platform-config': {
+      type: 'boolean',
+      description: 'Ignore fly.toml/render.yaml/railway.json/Procfile settings',
+    },
+    compose: {
+      type: 'boolean',
+      description: 'Deploy a Compose file as a project',
+    },
+    'compose-file': {
+      type: 'string',
+      placeholder: 'file',
+      description: 'Compose file to use with --compose',
+    },
+    'dry-run': {
+      type: 'boolean',
+      description: 'Print the compose plan without creating anything',
+    },
     workspace: {
       type: 'string',
       placeholder: 'workspace',
@@ -260,7 +279,73 @@ register({
     }
     if (!st.isDirectory()) throw usageError(`Not a folder: ${dir}`);
 
-    await ensureDockerfile(ctx, dir, resolveDeployDockerfile(ctx, dir));
+    // Compose mode: --compose / --compose-file, or auto-detected compose
+    // file on a TTY when there is no single-server link. Runs the project
+    // executor and returns before the single-server flow.
+    let composeFile: string | null = null;
+    if (ctx.flags.compose || ctx.flags['compose-file']) {
+      composeFile = ctx.flags['compose-file']
+        ? String(ctx.flags['compose-file'])
+        : findComposeFile(dir);
+      if (!composeFile)
+        throw usageError('No compose file found in this folder');
+    } else if (!link && tty && findComposeFile(dir)) {
+      const sel = await select(
+        {
+          message: `Found ${findComposeFile(dir)} — how should I deploy it?`,
+          options: [
+            { label: 'Deploy all services as a project', value: 'project' },
+            { label: 'Deploy this folder as one server', value: 'single' },
+          ],
+        },
+        ctx.io.theme,
+      );
+      if (sel === 'project') composeFile = findComposeFile(dir);
+    }
+    if (composeFile) {
+      return await runCompose(ctx, dir, composeFile);
+    }
+
+    // Settings from fly.toml, render.yaml, railway.* or Procfile. Only read
+    // for folders not yet linked to a server; they're applied when a new
+    // server is created below.
+    let platform =
+      ctx.flags['no-platform-config'] || link || ctx.flags.server
+        ? null
+        : detectPlatformConfig(dir);
+    if (platform && tty && !ctx.io.yes) {
+      process.stderr.write(
+        `${(platformSummary(platform) as string[]).map(sanitize).join('\n')}\n`,
+      );
+      const use = await confirm(
+        {
+          message: 'Use these settings?',
+          label: 'Use settings',
+          default: true,
+        },
+        ctx.io.theme,
+      );
+      if (!use) platform = null;
+    } else if (platform) {
+      process.stderr.write(
+        `${ctx.io.theme.paint('muted', `Using settings from ${platform.source} (${sanitize(platformSummary(platform, true) as string)})`)}\n`,
+      );
+    }
+    if (platform?.dockerfilePath && !ctx.flags.dockerfile)
+      ctx = {
+        ...ctx,
+        flags: {
+          ...ctx.flags,
+          dockerfile: path.join(dir, platform.dockerfilePath),
+        },
+      };
+
+    const dockerfileRel = resolveDeployDockerfile(ctx, dir);
+    if (platform?.startCommand && existsSync(path.resolve(dir, dockerfileRel)))
+      process.stderr.write(
+        `${ctx.io.theme.paint('muted', `The existing Dockerfile's CMD is used, not the start command from ${platform.source}.`)}\n`,
+      );
+    await ensureDockerfile(ctx, dir, dockerfileRel, platform?.startCommand);
 
     let target: { id: string; name: string } | null = null;
     if (ctx.flags.server) {
@@ -300,11 +385,25 @@ register({
           ...ctx.flags,
           dir,
           wait: follow,
+          __platform: platform,
           __source: source ?? (await pickSource({ ...ctx, flags: { dir } })),
         },
       });
       const id = String(result.data?.id ?? '');
       const name = String(result.data?.name ?? id);
+      if (platform?.healthCheck && id) {
+        try {
+          await ctx.api().put(['servers', id, 'health-check'], {
+            healthCheck: { type: 'http', path: platform.healthCheck.path },
+          });
+        } catch (e) {
+          process.stderr.write(
+            `${ctx.io.theme.paint('warning', ctx.io.theme.glyph('bang'))} Could not set the health check: ${sanitize(e instanceof Error ? e.message : 'request failed')}\n`,
+          );
+        }
+      }
+      const ref = /\s/.test(name) ? `"${name}"` : name;
+      const manualEnv = platform?.needsManualEnv ?? [];
       const saved = id ? writeLink(dir, { id, name }) : false;
       const address = id && follow ? await liveAddress(ctx, id) : null;
       return withExtras(
@@ -321,8 +420,17 @@ register({
                 ),
               ]
             : []),
+          ...(manualEnv.length
+            ? [
+                `  ${ui.theme.paint('warning', 'Set these variables')}  ${manualEnv.map(sanitize).join(', ')}`,
+                ui.theme.paint(
+                  'muted',
+                  `  In the dashboard, or with: bitqate servers startup ${sanitize(ref)} --env ${sanitize(manualEnv[0])}=...`,
+                ),
+              ]
+            : []),
         ],
-        { address, linked: saved },
+        { address, linked: saved, needsManualEnv: manualEnv },
       );
     }
 

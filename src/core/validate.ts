@@ -91,8 +91,9 @@ import { parseDotenv } from './dotenv';
 export function envFromFilesAndFlags(
   files: string[] | undefined,
   pairs: string[] | undefined,
+  base?: Record<string, string>,
 ): Record<string, string> {
-  const out: Record<string, string> = {};
+  const out: Record<string, string> = { ...(base ?? {}) };
   for (const f of files ?? []) {
     let text: string;
     try {

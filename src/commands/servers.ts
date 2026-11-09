@@ -569,6 +569,21 @@ register({
       database = w.database;
     }
 
+    // Settings read from fly.toml, render.yaml, railway.* or a Procfile by
+    // `bitqate deploy`. Their env sits under anything the user passed.
+    const platform = ctx.flags.__platform as
+      | { appPort?: number; dataPath?: string; env: Record<string, string> }
+      | null
+      | undefined;
+    if (platform && (mode === 'git' || mode === 'dockerfile')) {
+      body.variables = {
+        ...platform.env,
+        ...((body.variables as Record<string, string>) ?? {}),
+      };
+      if (platform.appPort) body.appPort = platform.appPort;
+      if (platform.dataPath) body.dataPath = platform.dataPath;
+    }
+
     const dir = ctx.flags.dir ?? wizardDir;
     const pkg = dir ? await packageDir(ctx, String(dir)) : null;
 
@@ -1278,7 +1293,7 @@ register({
   },
 });
 
-async function packageDir(
+export async function packageDir(
   ctx: RunContext,
   dir: string,
 ): Promise<{
@@ -1319,7 +1334,7 @@ async function packageDir(
   return { ...packed, dockerfile, message, info };
 }
 
-async function uploadPackage(
+export async function uploadPackage(
   ctx: RunContext,
   serverId: string,
   pkg: Awaited<ReturnType<typeof packageDir>>,

@@ -366,10 +366,7 @@ function appLines(d: any, ui: any): Renderable {
   const customPort = d.appPort !== null && d.appPort !== undefined;
   const customPath = d.dataPath !== null && d.dataPath !== undefined;
   const detail: [string, string][] = [
-    [
-      'App port',
-      `${d.effectivePort ?? 8000}${customPort ? '' : ' (default)'}`,
-    ],
+    ['App port', `${d.effectivePort ?? 8000}${customPort ? '' : ' (default)'}`],
     [
       'Data path',
       `${d.effectiveDataPath ?? '/app/data'}${customPath ? '' : ' (default)'}`,
@@ -545,9 +542,12 @@ register({
     if (!jobId) throw new CliError('server', 'The import could not start');
 
     if (ctx.flags['no-follow'] || ctx.io.json) {
-      return { data: { id, jobId }, render: (d, ui) => ({
-        lines: [checkmark(ui, `Import ${d.jobId} started on ${name}`)],
-      }) };
+      return {
+        data: { id, jobId },
+        render: (d, ui) => ({
+          lines: [checkmark(ui, `Import ${d.jobId} started on ${name}`)],
+        }),
+      };
     }
 
     // Follow progress until the job settles.
@@ -557,8 +557,7 @@ register({
         .api()
         .get(['servers', id, 'database', 'import', jobId]);
       const lines: string[] = data?.lines ?? [];
-      for (const l of lines.slice(offset))
-        process.stderr.write(`${l}\n`);
+      for (const l of lines.slice(offset)) process.stderr.write(`${l}\n`);
       offset = lines.length;
       if (data?.status !== 'running') {
         importStatus(data);
