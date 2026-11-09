@@ -8,6 +8,11 @@ import { ApiClient, DryRunRequest } from './core/client';
 import { loadConfig, resolveAuth } from './core/config';
 import { CliError, usageError } from './core/errors';
 import {
+  finishUpdateCheck,
+  startUpdateCheck,
+  updateCheckDisabled,
+} from './core/update-check';
+import {
   errorHint,
   isRenderable,
   printError,
@@ -327,8 +332,18 @@ export function wantsJson(argv: string[]): boolean {
 
 export async function run(argv: string[]): Promise<number> {
   const json = wantsJson(argv);
+  const quiet = argv.includes('-q') || argv.includes('--quiet');
+  const skipCheck = updateCheckDisabled({
+    env: process.env,
+    stderrTty: !!process.stderr.isTTY,
+    json,
+    quiet,
+    commandPath: argv.filter((a) => !a.startsWith('-')),
+  });
+  const pending = skipCheck ? null : startUpdateCheck();
   try {
-    return await main(argv);
+    const code = await main(argv);
+    return code;
   } catch (err) {
     releaseInputGuard();
     const theme = makeTheme(
@@ -347,5 +362,14 @@ export async function run(argv: string[]): Promise<number> {
     return 1;
   } finally {
     releaseInputGuard();
+    if (!skipCheck)
+      await finishUpdateCheck({
+        pending,
+        current: pkg.version,
+        theme: makeTheme(
+          argv.includes('--no-color') ? 0 : detectLevel(process.stderr),
+          useUnicode(),
+        ),
+      }).catch(() => {});
   }
 }

@@ -255,3 +255,7 @@ The archive must compress to 50 MB or less, so leave dependencies and build outp
 
 Apache License 2.0. See [LICENSE](LICENSE). The license does not grant rights to
 the BitQate name or logo.
+
+## Update checks
+
+Once a day the CLI checks whether a newer release exists. The check goes through `https://api.bitqate.com/public/cli/version` — an anonymous endpoint, no token and nothing else is sent. It's skipped in CI, in `--json`/`--quiet` output, and when stderr isn't a terminal. Set `BITQATE_NO_UPDATE_CHECK=1` to disable it entirely.

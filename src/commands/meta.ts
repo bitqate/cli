@@ -10,7 +10,12 @@ import {
   register,
   subcommandsOf,
 } from '../registry';
-import pkg from '../../package.json';
+import pkg from '../../package.json' with { type: 'json' };
+import {
+  currentUpdateCommand,
+  isNewer,
+  readUpdateCheckCache,
+} from '../core/update-check';
 
 function completionScript(shell: string): string {
   const paths = commands.map((c) => c.path.join(' '));
@@ -134,9 +139,24 @@ register({
   scope: null,
   examples: ['bitqate version'],
   async run() {
+    const cached = readUpdateCheckCache();
+    const latest =
+      cached?.latest && isNewer(cached.latest, pkg.version)
+        ? {
+            version: cached.latest,
+            command: currentUpdateCommand(),
+          }
+        : null;
     return {
-      data: { version: pkg.version },
-      render: (d) => ({ lines: [`bitqate ${d.version}`] }),
+      data: { version: pkg.version, latest: latest?.version ?? null },
+      render: (d) => ({
+        lines: [
+          `bitqate ${d.version}`,
+          ...(latest
+            ? [`latest ${latest.version} (update available: ${latest.command})`]
+            : []),
+        ],
+      }),
     };
   },
 });
