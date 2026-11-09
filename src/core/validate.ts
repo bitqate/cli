@@ -82,3 +82,31 @@ export function positiveInt(value: string, flag: string): number {
     throw usageError(`--${flag} must be a positive integer`);
   return n;
 }
+
+import { readFileSync } from 'node:fs';
+import { parseDotenv } from './dotenv';
+
+// Merges --env-file values (dotenv files, applied in order) under explicit
+// --env KEY=VALUE pairs, which always win.
+export function envFromFilesAndFlags(
+  files: string[] | undefined,
+  pairs: string[] | undefined,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const f of files ?? []) {
+    let text: string;
+    try {
+      text = readFileSync(f, 'utf-8');
+    } catch {
+      throw usageError(`Cannot read env file: ${f}`);
+    }
+    try {
+      Object.assign(out, parseDotenv(text));
+    } catch (e) {
+      if (e instanceof Error) throw usageError(`${f}: ${e.message}`);
+      throw e;
+    }
+  }
+  if (pairs?.length) Object.assign(out, parseEnvPairs(pairs));
+  return out;
+}

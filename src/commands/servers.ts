@@ -3,6 +3,7 @@ import { CliError, usageError } from '../core/errors';
 import { confirmDestroy, waitPoll } from '../core/confirm';
 import { openUrl, portalUrl } from '../core/portal';
 import { priceMap, serverMonthly } from '../core/pricing';
+import { envFromFilesAndFlags } from '../core/validate';
 import { resolveOption, resolveResource } from '../core/resolve';
 import { detailToLines, sanitize } from '../core/output';
 import { findGame, GAMES } from '../data/games';
@@ -409,6 +410,12 @@ register({
       multiple: true,
       description: 'KEY=VALUE (repeatable)',
     },
+    'env-file': {
+      type: 'string',
+      placeholder: 'path',
+      multiple: true,
+      description: 'Read env vars from a dotenv file (repeatable)',
+    },
     startup: {
       type: 'string',
       placeholder: 'command',
@@ -538,11 +545,12 @@ register({
       } else {
         body.mode = 'git';
       }
-      if (ctx.flags.env?.length)
-        body.variables = {
-          ...(body.variables as object),
-          ...parseEnvPairs(ctx.flags.env),
-        };
+      const envVars = envFromFilesAndFlags(
+        ctx.flags['env-file'] as string[] | undefined,
+        ctx.flags.env as string[] | undefined,
+      );
+      if (Object.keys(envVars).length)
+        body.variables = { ...(body.variables as object), ...envVars };
       if (ctx.flags.startup) body.startup = ctx.flags.startup;
       if (ctx.flags.workspace)
         body.teamId = await resolveOption(
@@ -925,6 +933,12 @@ register({
       multiple: true,
       description: 'KEY=VALUE (repeatable)',
     },
+    'env-file': {
+      type: 'string',
+      placeholder: 'path',
+      multiple: true,
+      description: 'Read env vars from a dotenv file (repeatable)',
+    },
   },
   scope: 'servers:write',
   examples: [
@@ -934,7 +948,11 @@ register({
     const { id, name } = await resolveSrv(ctx);
     const body: Record<string, unknown> = {};
     if (ctx.flags.command !== undefined) body.startup = ctx.flags.command;
-    if (ctx.flags.env?.length) body.variables = parseEnvPairs(ctx.flags.env);
+    const envVars = envFromFilesAndFlags(
+      ctx.flags['env-file'] as string[] | undefined,
+      ctx.flags.env as string[] | undefined,
+    );
+    if (Object.keys(envVars).length) body.variables = envVars;
     if (!Object.keys(body).length) throw usageError('Pass --command or --env');
     const resp = await ctx.api().put(['servers', id, 'startup'], body);
     return {

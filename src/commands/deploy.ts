@@ -171,6 +171,12 @@ register({
       multiple: true,
       description: 'Environment variable for a new server',
     },
+    'env-file': {
+      type: 'string',
+      placeholder: 'path',
+      multiple: true,
+      description: 'Read env vars from a dotenv file (repeatable)',
+    },
     workspace: {
       type: 'string',
       placeholder: 'workspace',
