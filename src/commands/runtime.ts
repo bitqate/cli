@@ -10,7 +10,7 @@ import { register, type RunContext } from '../registry';
 import type { Renderable } from '../core/output';
 
 // Runtime commands for container servers: logs, health checks, the private
-// network and git deployment rollbacks.
+// network, public access and git deployment rollbacks.
 
 function checkmark(ui: { theme: any }, msg: string): string {
   return `${ui.theme.paint('success', ui.theme.glyph('check'))} ${msg}`;
@@ -696,6 +696,85 @@ register({
     };
   },
 });
+
+// ---------- public access ----------
+
+function publicAccessRender(d: any, ui: any): Renderable {
+  const lines = [
+    d.internalOnly
+      ? `${ui.theme.paint('strong', 'Internal only')}: no public ports or HTTPS addresses`
+      : `${ui.theme.paint('strong', 'Public')}: reachable from the internet`,
+  ];
+  if (d.internalOnly)
+    lines.push(
+      ui.theme.paint(
+        'muted',
+        'Reachable only from its private network at <hostname>.internal.',
+      ),
+    );
+  if (d.restartRequired)
+    lines.push(
+      ui.theme.paint('warning', 'Restart the server to apply the change.'),
+    );
+  if (d.nodeUnavailable)
+    lines.push(
+      ui.theme.paint(
+        'warning',
+        "The server's node couldn't be reached; showing the stored setting.",
+      ),
+    );
+  if (!d.internalOnly && !d.privateNetwork)
+    lines.push(
+      ui.theme.paint(
+        'muted',
+        'Join the private network first to make it internal only: bitqate servers network enable <server>',
+      ),
+    );
+  return { lines };
+}
+
+register({
+  path: ['servers', 'public-access', 'get'],
+  summary: 'Show whether the server is internal only',
+  args: [{ name: 'id', required: false, description: 'Server name or ID' }],
+  flags: {},
+  scope: 'servers:read',
+  aliases: ['show', 'info'],
+  examples: ['bitqate servers public-access get db'],
+  async run(ctx) {
+    const { id } = await resolveSrv(ctx);
+    const data = await ctx.api().get(['servers', id, 'public-access']);
+    return { data, render: publicAccessRender };
+  },
+});
+
+for (const [op, internalOnly] of [
+  ['enable', false],
+  ['disable', true],
+] as const) {
+  register({
+    path: ['servers', 'public-access', op],
+    summary: internalOnly
+      ? 'Turn off public ports and HTTPS addresses (internal only)'
+      : 'Turn public ports and HTTPS addresses back on',
+    description: internalOnly
+      ? 'The server stays reachable only from its private network at ' +
+        '<hostname>.internal. Needs the private network ' +
+        '(bitqate servers network enable).'
+      : undefined,
+    args: [{ name: 'id', required: false, description: 'Server name or ID' }],
+    flags: {},
+    scope: 'servers:write',
+    examples: [`bitqate servers public-access ${op} db`],
+    async run(ctx) {
+      const { id } = await resolveSrv(ctx);
+      const data = await ctx
+        .api()
+        .put(['servers', id, 'public-access'], { internalOnly });
+      return { data, render: publicAccessRender };
+    },
+  });
+}
 
 // ---------- rollback ----------
 

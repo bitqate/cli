@@ -57,6 +57,7 @@ const STATUS_TONES: Record<string, Tone> = {
   success: 'success',
   completed: 'success',
   creating: 'progress',
+  deploying: 'progress',
   starting: 'progress',
   stopping: 'progress',
   restarting: 'progress',
