@@ -4,6 +4,8 @@ import { CliError, usageError } from '../core/errors';
 import { ensureDockerfile } from '../core/dockerfile';
 import { detectPlatformConfig, platformSummary } from '../core/platform-config';
 import { runCompose, findComposeFile, readComposeLink } from './compose';
+import { runStack } from './stack';
+import { findStackConfig } from '../core/stack-config';
 import { isRenderable, sanitize, type Renderable } from '../core/output';
 import { resolveResource } from '../core/resolve';
 import {
@@ -112,7 +114,7 @@ register({
   path: ['deploy'],
   summary: 'Deploy your code, an app, a database or a game server',
   description:
-    'Run it in your project folder. The first time it asks where to deploy and remembers the answer in .bitqate.json, so next time it just ships your latest code and streams the build.',
+    'Run it in your project folder. The first time it asks where to deploy and remembers the answer in .bitqate.json, so next time it just ships your latest code and streams the build. A bitqate.toml in the folder deploys every service it defines together.',
   args: [
     {
       name: 'path',
@@ -194,7 +196,14 @@ register({
     },
     'dry-run': {
       type: 'boolean',
-      description: 'Print the compose plan without creating anything',
+      description:
+        'Print the compose or bitqate.toml plan without creating anything',
+    },
+    input: {
+      type: 'string',
+      placeholder: 'key=value',
+      multiple: true,
+      description: 'Value for a bitqate.toml input (repeatable)',
     },
     workspace: {
       type: 'string',
@@ -231,6 +240,7 @@ register({
     'bitqate deploy --database postgres',
     'bitqate deploy --image nginx:stable-alpine --name web',
     'bitqate deploy --game paper',
+    'bitqate deploy --input admin_email=me@example.com',
   ],
   async run(ctx) {
     const create = findCommand(['servers', 'create'])!;
@@ -258,7 +268,17 @@ register({
     let link = readLink(dir ?? '.');
     let source: PickedSource | undefined;
 
-    if (dir === undefined && !link && !ctx.flags.server && tty) {
+    const composeRequested = !!(ctx.flags.compose || ctx.flags['compose-file']);
+    const useStack = (d: string) =>
+      !link && !ctx.flags.server && !composeRequested && !!findStackConfig(d);
+
+    if (
+      dir === undefined &&
+      !link &&
+      !ctx.flags.server &&
+      tty &&
+      !useStack('.')
+    ) {
       source = await pickSource(ctx);
       if (source.dir === undefined)
         return create.run({
@@ -279,8 +299,10 @@ register({
     }
     if (!st.isDirectory()) throw usageError(`Not a folder: ${dir}`);
 
+    if (useStack(dir)) return await runStack(ctx, dir);
+
     let composeFile: string | null = null;
-    if (ctx.flags.compose || ctx.flags['compose-file']) {
+    if (composeRequested) {
       composeFile = ctx.flags['compose-file']
         ? String(ctx.flags['compose-file'])
         : findComposeFile(dir);

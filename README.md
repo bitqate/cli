@@ -255,6 +255,41 @@ Inside a git work tree, tracked files plus untracked files that are not gitignor
 
 The archive must compress to 50 MB or less, so leave dependencies and build output out; they're rebuilt on the server. Your server's environment variables are available while the image builds and when it runs. Uploaded deployments can't be redeployed or rolled back because their files aren't kept, and on a GitHub-connected server the next push replaces the upload.
 
+### Deploy a stack with bitqate.toml
+
+When the folder has a `bitqate.toml`, `bitqate deploy` deploys every service
+it defines together, the same way the dashboard does: one server per service,
+grouped in a new project and sharing a private network. Services with a
+`dockerfile` are built from the folder, services with an `image` run that
+image. The same file works from the dashboard's GitHub flow.
+
+```toml
+secrets = ["db_password"]
+
+[services.db]
+image = "postgres:18"
+env = { POSTGRES_USER = "app", POSTGRES_PASSWORD = "{{secrets.db_password}}", POSTGRES_DB = "app" }
+
+[services.web]
+dockerfile = "Dockerfile"
+port = 3000
+env = { DATABASE_URL = "postgres://app:{{secrets.db_password}}@{{services.db.host}}:{{services.db.port}}/app" }
+```
+
+```sh
+bitqate deploy --name shop --region <region>      # creates shop-db and shop-web
+bitqate deploy --input admin_email=me@example.com # values for [[inputs]]
+bitqate deploy --dry-run                          # print the plan and cost only
+```
+
+Servers are created first, joined to the private network as
+`<name>-<service>.internal`, then started in dependency order. The servers are
+saved in `.bitqate.json`, so the next `bitqate deploy` re-uploads the
+`dockerfile` services; edits to `bitqate.toml` itself apply when you deploy
+the stack again from a fresh folder. `{{public.<port>}}` placeholders are only
+supported from the dashboard for now. Pass `--server` or `--compose` to
+deploy the folder another way.
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE). The license does not grant rights to
