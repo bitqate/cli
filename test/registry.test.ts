@@ -168,6 +168,35 @@ describe('output', () => {
 });
 
 describe('main', () => {
+  const run = async (argv: string[]) => {
+    const write = spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      expect(await main(argv)).toBe(0);
+      return write.mock.calls.map(([s]) => String(s)).join('');
+    } finally {
+      write.mockRestore();
+    }
+  };
+
+  test('bare bitqate shows a short overview that points to -h', async () => {
+    const out = await run([]);
+    expect(out).toContain('deploy');
+    expect(out).toContain('bitqate -h');
+    expect(out).not.toContain('Flags');
+    expect(out).not.toContain('transactions');
+    expect(out.split('\n').length).toBeLessThan(16);
+  });
+
+  test('bitqate -h and --help show every command and the global flags', async () => {
+    for (const flag of ['-h', '--help']) {
+      const out = await run([flag]);
+      expect(out).toContain('transactions');
+      expect(out).toContain('Flags');
+      expect(out).toContain('--json');
+      expect(out).not.toContain('bitqate -h for all commands');
+    }
+  });
+
   test('--version prints the version, with or without global flags', async () => {
     for (const argv of [['--version'], ['version'], ['--json', '--version']]) {
       const write = spyOn(process.stdout, 'write').mockImplementation(

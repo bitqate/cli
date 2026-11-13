@@ -105,6 +105,26 @@ export function rootHelp(theme: Theme): string {
   return lines.join('\n');
 }
 
+const OVERVIEW: [string, string][] = [
+  ['deploy', 'Deploy your code, an app, a database or a game server'],
+  ['servers', 'Deploy containers, game servers and apps'],
+  ['vms', 'Create and manage virtual private servers'],
+  ['account', 'Your account and balance'],
+];
+
+export function rootOverview(theme: Theme, loggedIn: boolean): string {
+  const items: [string, string][] = loggedIn
+    ? OVERVIEW
+    : [['login', 'Log in through your browser'], ...OVERVIEW];
+  const w = Math.max(...items.map(([n]) => n.length));
+  return [
+    ...items.map(([n, d]) => `  ${theme.paint('strong', n.padEnd(w))}  ${d}`),
+    '',
+    `Run ${theme.paint('strong', 'bitqate -h')} for all commands and flags.`,
+    `  ${theme.paint('muted', 'Docs')}  ${DOCS}`,
+  ].join('\n');
+}
+
 const GROUP_SECTIONS: Record<string, [string, string[]][]> = {
   vms: [
     [

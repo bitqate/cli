@@ -22,7 +22,7 @@ import {
 } from './core/output';
 import { encodePathSegment, isApiTokenFormat } from './core/validate';
 import { commands, findGroup, groups, matchPath } from './registry';
-import { commandHelp, groupHelp, rootHelp } from './ui/help';
+import { commandHelp, groupHelp, rootHelp, rootOverview } from './ui/help';
 import { isInteractive } from './ui/spinner';
 import { money } from './ui/format';
 import { detectLevel, makeTheme, useUnicode } from './ui/theme';
@@ -72,6 +72,7 @@ async function confirmDestructive(
 async function rootScreen(io: {
   interactive: boolean;
   json: boolean;
+  help: boolean;
 }): Promise<number> {
   const theme = makeTheme(detectLevel(process.stdout), useUnicode());
   const width = process.stdout.columns ?? 80;
@@ -83,16 +84,21 @@ async function rootScreen(io: {
     `${title}${' '.repeat(pad)}${theme.paint('muted', ver)}\n\n`,
   );
 
+  if (io.help) {
+    process.stdout.write(`${rootHelp(theme)}\n`);
+    return 0;
+  }
+
+  const { token } = resolveAuth(loadConfig(), {});
+  const apiToken = token && isApiTokenFormat(token) ? token : null;
   if (process.stdout.isTTY) {
-    const config = loadConfig();
-    const auth = resolveAuth(config, {});
-    if (!auth.token || !isApiTokenFormat(auth.token)) {
+    if (!apiToken) {
       process.stdout.write(
         `  You're not logged in. Run ${theme.paint('strong', 'bitqate login')} to get started.\n\n`,
       );
     } else {
       try {
-        const client = new ApiClient({ token: auth.token });
+        const client = new ApiClient({ token: apiToken });
         const grab = <T>(p: Promise<T>) =>
           Promise.race<T | null>([
             p,
@@ -134,7 +140,7 @@ async function rootScreen(io: {
       }
     }
   }
-  process.stdout.write(`${rootHelp(theme)}\n`);
+  process.stdout.write(`${rootOverview(theme, !!apiToken)}\n`);
   return 0;
 }
 
@@ -164,7 +170,10 @@ export async function main(argv: string[]): Promise<number> {
     }
     const stray = restArgv.find((t) => t.startsWith('-'));
     if (stray) throw usageError(`Unknown flag '${stray.split('=')[0]}'`);
-    return rootScreen(ioFlags);
+    return rootScreen({
+      ...ioFlags,
+      help: flagArgv.includes('-h') || flagArgv.includes('--help'),
+    });
   }
 
   const { command, consumed } = matchPath(leading);
