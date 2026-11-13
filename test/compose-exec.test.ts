@@ -77,7 +77,9 @@ function fakeCtx(
       return {};
     },
     async post(p: string[], b: any) {
-      calls.push(`POST ${p.join('/')} ${JSON.stringify(b)}`);
+      calls.push(
+        `POST ${p.join('/')}${b === undefined ? '' : ` ${JSON.stringify(b)}`}`,
+      );
       if (p[0] === 'projects')
         return {
           success: true,
@@ -86,7 +88,7 @@ function fakeCtx(
             environments: [{ id: 'e1', kind: 'production' }],
           },
         };
-      if (p[0] === 'servers') {
+      if (p[0] === 'servers' && p.length === 1) {
         serverN++;
         if (opts.failSecond && serverN === 2) return { success: false };
         return { success: true, id: `s${serverN}` };
@@ -99,7 +101,8 @@ function fakeCtx(
         throw new Error('net err');
       return { success: true };
     },
-    async upload() {
+    async upload(p: string[]) {
+      calls.push(`UPLOAD ${p.join('/')}`);
       return { success: true };
     },
   };
@@ -119,7 +122,7 @@ function fakeCtx(
 }
 
 describe('runCompose happy path', () => {
-  test('order: project → dbs → poll → create → upload → ports → net → resources, link written', async () => {
+  test('order: project → dbs → poll → create → ports → net → resources → start/upload, link written', async () => {
     fs.rmSync(path.join(dir, '.bitqate.json'), { force: true });
     const calls: string[] = [];
     const ctx = fakeCtx(calls);
@@ -129,8 +132,23 @@ describe('runCompose happy path', () => {
     expect(order.indexOf('POST projects')).toBeLessThan(
       order.indexOf('POST servers'),
     );
-    const creates = calls.filter((c) => c.startsWith('POST servers'));
+    const creates = calls.filter((c) => c.startsWith('POST servers {'));
     expect(creates.length).toBe(3);
+    for (const c of creates) expect(c).toContain('"autoStart":false');
+    const lastJoin = Math.max(
+      ...calls.flatMap((c, i) => (c.includes('/private-network ') ? [i] : [])),
+    );
+    const firstStart = calls.findIndex(
+      (c) => c.endsWith('/start') || c.startsWith('UPLOAD'),
+    );
+    expect(firstStart).toBeGreaterThan(lastJoin);
+    expect(calls.filter((c) => /^POST servers\/s\d\/start$/.test(c))).toEqual([
+      'POST servers/s1/start',
+      'POST servers/s2/start',
+    ]);
+    expect(calls.filter((c) => c.startsWith('UPLOAD'))).toEqual([
+      'UPLOAD servers/s3/deploy/upload',
+    ]);
     const appCreate = creates.find((c) => c.includes('"name":"api"'))!;
     expect(appCreate).toContain('db:26401');
     expect(appCreate).toContain('"appPort":3000');

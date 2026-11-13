@@ -65,6 +65,7 @@ export function serviceBody(
     cpu: Math.round(s.cpu * 100),
     disk: s.diskGb,
     variables: s.env,
+    autoStart: false,
   };
   if (s.extraMounts.length) {
     body.extraMounts = s.extraMounts.map((m) => ({
@@ -298,6 +299,35 @@ export async function runCompose(
     );
     const prodId = String(prod?.id ?? '');
 
+    const joinProject = async (s: PlannedService, id: string) => {
+      try {
+        await ctx.api().put(['servers', id, 'private-network'], {
+          enabled: true,
+          hostname: s.hostname,
+        });
+      } catch (e) {
+        warn(
+          s.name,
+          `could not enable private networking: ${e instanceof Error ? e.message : 'failed'}`,
+        );
+      }
+      if (prodId) {
+        try {
+          await ctx
+            .api()
+            .put(['projects', projectId, 'environments', prodId, 'resources'], {
+              type: 'server',
+              id,
+            });
+        } catch (e) {
+          warn(
+            s.name,
+            `could not add to the project: ${e instanceof Error ? e.message : 'failed'}`,
+          );
+        }
+      }
+    };
+
     const assigned = new Map<string, number>();
     for (const s of plan.services.filter((x) => x.kind === 'database')) {
       const { body } = serviceBody(s, { region });
@@ -307,6 +337,7 @@ export async function runCompose(
       const id = String(r?.id ?? '');
       if (!id) throw new CliError('server', `Could not create ${s.name}`);
       created.push({ name: s.name, id });
+      await joinProject(s, id);
       const deadline = Date.now() + 60_000;
       for (;;) {
         const info = await ctx.api().get(['servers', id]);
@@ -335,6 +366,24 @@ export async function runCompose(
       const id = String(r?.id ?? '');
       if (!id) throw new CliError('server', `Could not create ${s.name}`);
       created.push({ name: s.name, id });
+      for (const port of extraPorts) {
+        try {
+          await ctx.api().put(['servers', id, 'ports'], {
+            ports: [{ internalPort: port }],
+          });
+        } catch (e) {
+          warn(
+            s.name,
+            `could not add port ${port}: ${e instanceof Error ? e.message : 'failed'}`,
+          );
+        }
+      }
+      await joinProject(s, id);
+    }
+
+    for (const s of plan.services) {
+      const c = created.find((x) => x.name === s.name);
+      if (!c) continue;
       if (s.kind === 'build') {
         const ctxDir = path.resolve(dir, s.build?.context ?? '.');
         const { packageDir, uploadPackage } = await import('./servers');
@@ -350,19 +399,18 @@ export async function runCompose(
           },
           ctxDir,
         );
-        await uploadPackage(ctx, id, pkg);
+        await uploadPackage(ctx, c.id, pkg);
+        continue;
       }
-      for (const port of extraPorts) {
-        try {
-          await ctx.api().put(['servers', id, 'ports'], {
-            ports: [{ internalPort: port }],
-          });
-        } catch (e) {
-          warn(
-            s.name,
-            `could not add port ${port}: ${e instanceof Error ? e.message : 'failed'}`,
-          );
-        }
+      try {
+        await task(`Starting ${s.name}`, ctx.io.theme, () =>
+          ctx.api().post(['servers', c.id, 'start']),
+        );
+      } catch (e) {
+        warn(
+          s.name,
+          `could not start: ${e instanceof Error ? e.message : 'failed'}`,
+        );
       }
     }
 
@@ -381,32 +429,6 @@ export async function runCompose(
         const a = info?.server?.address ?? info?.address;
         address = a?.host && a?.port ? `${a.host}:${a.port}` : null;
       } catch {}
-      try {
-        await ctx.api().put(['servers', c.id, 'private-network'], {
-          enabled: true,
-          hostname: s.hostname,
-        });
-      } catch (e) {
-        warn(
-          s.name,
-          `could not enable private networking: ${e instanceof Error ? e.message : 'failed'}`,
-        );
-      }
-      if (prodId) {
-        try {
-          await ctx
-            .api()
-            .put(['projects', projectId, 'environments', prodId, 'resources'], {
-              type: 'server',
-              id: c.id,
-            });
-        } catch (e) {
-          warn(
-            s.name,
-            `could not add to the project: ${e instanceof Error ? e.message : 'failed'}`,
-          );
-        }
-      }
       results.push({
         name: s.name,
         kind: s.kind,
