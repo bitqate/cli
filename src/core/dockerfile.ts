@@ -3,7 +3,6 @@ import path from 'node:path';
 import { CliError } from './errors';
 import { sanitize } from './output';
 import type { RunContext } from '../registry';
-import { confirm } from '../ui/prompts';
 import { task } from '../ui/spinner';
 
 export interface DockerfileSuggestion {
@@ -53,23 +52,22 @@ export async function suggestDockerfile(
   }
 }
 
+const generated = new Map<string, string>();
+
 export async function ensureDockerfile(
   ctx: RunContext,
   dir: string,
   relPath: string,
   startCommand?: string,
-): Promise<void> {
+): Promise<string | null> {
   const abs = path.resolve(dir, relPath);
-  if (existsSync(abs)) return;
+  if (existsSync(abs)) return null;
+  const cached = generated.get(abs);
+  if (cached !== undefined) return cached;
   const theme = ctx.io.theme;
   const folder = dir === '.' ? 'this folder' : dir;
   const where =
     relPath === 'Dockerfile' ? `in ${folder}` : `at ${path.join(dir, relPath)}`;
-  if (!ctx.io.interactive || ctx.io.json) {
-    throw new CliError('usage', `No Dockerfile found ${where}.`, {
-      hint: 'Add a Dockerfile, pass --dockerfile <path>, or run bitqate deploy on a terminal to generate one',
-    });
-  }
   const suggestion = await task('Looking at your project', theme, () =>
     suggestDockerfile(ctx, dir, startCommand),
   );
@@ -82,25 +80,18 @@ export async function ensureDockerfile(
       },
     );
   }
-  process.stderr.write(
-    `${theme.paint('warning', theme.glyph('bang'))} No Dockerfile ${sanitize(where)}. This looks like a ${theme.paint('strong', suggestion.label)} project.\n`,
-  );
-  const go = ctx.io.yes
-    ? true
-    : await confirm(
-        {
-          message: `Create a Dockerfile for it?`,
-          label: 'Create Dockerfile',
-          default: true,
-        },
-        theme,
+  if (ctx.flags['write-dockerfile']) {
+    writeFileSync(abs, suggestion.dockerfile, { flag: 'wx' });
+    if (!ctx.io.json)
+      process.stderr.write(
+        `${theme.paint('success', theme.glyph('check'))} Wrote ${sanitize(path.relative(process.cwd(), abs) || 'Dockerfile')} ${theme.paint('muted', '(review and commit it)')}\n`,
       );
-  if (!go)
-    throw new CliError('cancelled', 'A Dockerfile is needed to deploy.', {
-      hint: 'Add one and run this again',
-    });
-  writeFileSync(abs, suggestion.dockerfile, { flag: 'wx' });
-  process.stderr.write(
-    `${theme.paint('success', theme.glyph('check'))} Wrote ${sanitize(path.relative(process.cwd(), abs) || 'Dockerfile')} ${theme.paint('muted', '(review and commit it)')}\n`,
-  );
+    return null;
+  }
+  if (!ctx.io.json)
+    process.stderr.write(
+      `${theme.paint('warning', theme.glyph('bang'))} No Dockerfile ${sanitize(where)}. This looks like a ${theme.paint('strong', suggestion.label)} project, so this deploy uses a generated Dockerfile. Your folder stays unchanged.\n${theme.paint('muted', 'Pass --write-dockerfile to save it to the folder instead.')}\n`,
+    );
+  generated.set(abs, suggestion.dockerfile);
+  return suggestion.dockerfile;
 }

@@ -147,6 +147,7 @@ export function collectSourceFiles(dir: string): {
 
 export interface PackOptions {
   dockerfile?: string;
+  dockerfileContent?: string;
   maxCompressedBytes?: number;
   maxEntries?: number;
   maxUncompressedBytes?: number;
@@ -187,7 +188,14 @@ export async function packSource(
   }
 
   const dfAbs = path.join(abs, dockerfile);
-  if (!existsSync(dfAbs) || !statSync(dfAbs).isFile()) {
+  const generatedDockerfile =
+    opts.dockerfileContent === undefined
+      ? null
+      : Buffer.from(opts.dockerfileContent, 'utf8');
+  if (
+    !generatedDockerfile &&
+    (!existsSync(dfAbs) || !statSync(dfAbs).isFile())
+  ) {
     throw usageError(
       `No Dockerfile at ${dockerfile} in ${dir}. Add one or pass --dockerfile <path>.`,
     );
@@ -209,7 +217,11 @@ export async function packSource(
     (pack as any).on('error', reject);
   });
 
-  const entries = files.includes(dockerfile) ? files : [...files, dockerfile];
+  const entries = generatedDockerfile
+    ? files.filter((f) => f !== dockerfile)
+    : files.includes(dockerfile)
+      ? files
+      : [...files, dockerfile];
 
   let bytes = 0;
   const sized: { name: string; size: number }[] = [];
@@ -232,6 +244,10 @@ export async function packSource(
     bytes += st.size;
     sized.push({ name: rel, size: st.size });
     regular.push({ rel, st });
+  }
+  if (generatedDockerfile) {
+    bytes += generatedDockerfile.length;
+    sized.push({ name: dockerfile, size: generatedDockerfile.length });
   }
   if (regular.length + links.length > maxEntries) {
     throw usageError(
@@ -286,6 +302,23 @@ export async function packSource(
     );
     names.push(rel);
     if (tooBig()) throw compressedError();
+  }
+  if (generatedDockerfile) {
+    await new Promise<void>((res, rej) =>
+      pack.entry(
+        {
+          name: dockerfile,
+          mode: 0o644,
+          uid: 0,
+          gid: 0,
+          mtime: new Date(),
+          size: generatedDockerfile.length,
+        },
+        generatedDockerfile,
+        (err) => (err ? rej(err) : res()),
+      ),
+    );
+    names.push(dockerfile);
   }
   pack.finalize();
   await collect;

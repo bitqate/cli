@@ -215,6 +215,11 @@ register({
       placeholder: 'path',
       description: 'Dockerfile inside the folder (default: Dockerfile)',
     },
+    'write-dockerfile': {
+      type: 'boolean',
+      description:
+        'Without a Dockerfile, save the generated one to the folder instead of only using it for this deploy',
+    },
     message: {
       type: 'string',
       short: 'm',

@@ -237,7 +237,8 @@ describe('servers create --dir', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bq-nodf-'));
     let created = false;
     const api = {
-      post: async () => {
+      post: async (segs: string[]) => {
+        if (segs[0] === 'dockerfile') return { stack: 'generic' };
         created = true;
         return { id: 'x' };
       },

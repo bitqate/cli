@@ -246,8 +246,10 @@ Run `bitqate deploy` in your project folder. The first time, it asks whether
 to create a new server or use an existing one, then saves the choice in
 `.bitqate.json`, so later runs just upload and stream the build. With no
 Dockerfile, it detects the project type (Node.js, Python, Go, Rust, PHP,
-Ruby, Java, static sites) and offers to write one. Your app should listen on
-`0.0.0.0` and the `PORT` environment variable.
+Ruby, Java, static sites) and deploys with a generated one, without adding
+anything to your folder. Pass `--write-dockerfile` to save it to the folder
+instead. Your app should listen on `0.0.0.0` and the `PORT` environment
+variable.
 
 `bitqate servers deploy <server> --dir .` packages a directory and deploys it the same way a push does, without going through GitHub. `servers create ... --dir . --wait` creates a server from local code in one step. Useful flags: `--dockerfile <path>` picks a Dockerfile inside the directory (default `Dockerfile`), `-m`/`--message <text>` sets the deployment message, and `--follow` streams the build logs.
 

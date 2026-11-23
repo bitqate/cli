@@ -1164,6 +1164,11 @@ register({
       placeholder: 'path',
       description: 'Dockerfile to use with --dir (default: Dockerfile)',
     },
+    'write-dockerfile': {
+      type: 'boolean',
+      description:
+        'Without a Dockerfile, save the generated one to the folder instead of only using it for this deploy',
+    },
     message: {
       type: 'string',
       short: 'm',
@@ -1311,10 +1316,13 @@ export async function packageDir(
   }
   if (!st.isDirectory()) throw usageError(`Not a directory: ${dir}`);
   const dockerfile = resolveDeployDockerfile(ctx, dir);
-  await ensureDockerfile(ctx, dir, dockerfile);
+  const dockerfileContent = await ensureDockerfile(ctx, dir, dockerfile);
   const packed = await task(`Packaging ${dir}`, ctx.io.theme, async () => {
     const { files, skipped, mode } = collectSourceFiles(dir);
-    const packed = await packSource(dir, files, { dockerfile });
+    const packed = await packSource(dir, files, {
+      dockerfile,
+      ...(dockerfileContent ? { dockerfileContent } : {}),
+    });
     return { ...packed, skipped, mode };
   });
   if (packed.skipped.length && !ctx.io.json)

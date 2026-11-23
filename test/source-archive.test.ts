@@ -91,6 +91,19 @@ describe('collectSourceFiles + packSource', () => {
     ).rejects.toThrow('Too many');
     fs.rmSync(d, { recursive: true, force: true });
   });
+  test('a generated Dockerfile is packed without touching the folder', async () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'bq-gen-'));
+    fs.writeFileSync(path.join(d, 'a.txt'), 'a');
+    const packed = await packSource(d, ['a.txt'], {
+      dockerfile: 'Dockerfile',
+      dockerfileContent: 'FROM node:24-alpine\n',
+    });
+    expect(fs.existsSync(path.join(d, 'Dockerfile'))).toBe(false);
+    expect(packed.names).toEqual(['a.txt', 'Dockerfile']);
+    const ent = await entries(packed.data);
+    expect(ent.Dockerfile?.type).toBe('file');
+    fs.rmSync(d, { recursive: true, force: true });
+  });
 });
 
 describe('resolveDeployDockerfile', () => {
