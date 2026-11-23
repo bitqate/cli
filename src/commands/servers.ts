@@ -591,6 +591,7 @@ register({
     );
     const id = resp?.id;
     if (!id) throw new CliError('server', 'Unexpected create response');
+    printWarnings(ctx, resp);
     const ref = /\s/.test(name) ? `"${name}"` : name;
 
     if (pkg) {
@@ -693,6 +694,15 @@ register({
     };
   },
 });
+
+export function printWarnings(ctx: RunContext, resp: any): void {
+  if (ctx.io.json || !Array.isArray(resp?.warnings)) return;
+  const theme = ctx.io.theme;
+  for (const w of resp.warnings)
+    process.stderr.write(
+      `${theme.paint('warning', theme.glyph('bang'))} ${sanitize(String(w))}\n`,
+    );
+}
 
 for (const op of ['start', 'stop', 'restart'] as const) {
   register({
@@ -804,8 +814,13 @@ register({
     if (ctx.flags.image) body.image = ctx.flags.image;
     if (ctx.flags['egg-url']) body.eggUrl = ctx.flags['egg-url'];
     const resp = await ctx.api().post(['servers', id, 'reinstall'], body);
+    printWarnings(ctx, resp);
     return {
-      data: { id, message: resp?.message ?? '' },
+      data: {
+        id,
+        message: resp?.message ?? '',
+        ...(Array.isArray(resp?.warnings) ? { warnings: resp.warnings } : {}),
+      },
       render: (v, ui) => ({ lines: [checkmark(ui, `Reinstalling ${name}`)] }),
     };
   },
