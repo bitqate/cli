@@ -706,13 +706,51 @@ for (const op of ['start', 'stop', 'restart'] as const) {
         placeholder: 'seconds',
         description: 'Seconds before giving up',
       },
+      ...(op === 'restart'
+        ? {
+            pull: {
+              type: 'boolean' as const,
+              description: "Pull the newest image for the server's tag first",
+            },
+          }
+        : {}),
     },
     scope: 'servers:power',
-    examples: [`bitqate servers ${op} api --wait`],
+    examples:
+      op === 'restart'
+        ? [
+            'bitqate servers restart api --wait',
+            'bitqate servers restart api --pull',
+          ]
+        : [`bitqate servers ${op} api --wait`],
     async run(ctx) {
       const resolved = await resolveSrv(ctx);
-      await ctx.api().post(['servers', resolved.id, op]);
-      if (!ctx.flags.wait) return { data: { id: resolved.id } };
+      const pull = op === 'restart' && !!ctx.flags.pull;
+      const res = await ctx
+        .api()
+        .post(
+          ['servers', resolved.id, op],
+          pull ? { pull_image: true } : undefined,
+        );
+      const imageLine = (ui: Parameters<typeof checkmark>[0]) =>
+        res?.image_pulled === false
+          ? "This server's node can't update images yet, so it restarted on the same one."
+          : res?.image_updated
+            ? checkmark(ui, 'Pulled a newer image')
+            : 'Already on the newest image';
+      const pullData = pull
+        ? {
+            image_pulled: res?.image_pulled === true,
+            image_updated: res?.image_updated === true,
+          }
+        : {};
+      if (!ctx.flags.wait)
+        return {
+          data: { id: resolved.id, ...pullData },
+          ...(pull
+            ? { render: (_v: unknown, ui: any) => ({ lines: [imageLine(ui)] }) }
+            : {}),
+        };
       const targets =
         op === 'stop' ? new Set(['offline']) : new Set(['online']);
       const server = await waitForServerStatus(
@@ -722,9 +760,10 @@ for (const op of ['start', 'stop', 'restart'] as const) {
         `${op[0].toUpperCase() + op.slice(1)}ing`,
       );
       return {
-        data: server,
+        data: { ...server, ...pullData },
         render: (v, ui) => ({
           lines: [
+            ...(pull ? [imageLine(ui)] : []),
             checkmark(
               ui,
               `${op === 'stop' ? 'Stopped' : op === 'start' ? 'Started' : 'Restarted'} ${resolved.name}`,

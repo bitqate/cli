@@ -142,7 +142,7 @@ servers  create --name <n> --region <daemonId> --memory-mb <n> --cpus <n>
                 | --dir <path>
                 [--env K=V ...] [--startup <cmd>] [--workspace <id>]
                 [--wait] [--dry-run]
-servers  start|stop|restart <id> [--wait]
+servers  start|stop|restart <id> [--wait] [--pull]
 servers  reinstall <id> [--image|--egg-url] | delete <id>   # destructive
 servers  renew <id> | auto-renew <id> on|off | rename <id> <name>
 servers  resize <id> [--memory-mb|--cpus|--disk-gb]
@@ -173,6 +173,8 @@ across restarts and redeploys until Ctrl-C (NDJSON `{"t","line"}` with
 `--json`). `deployments rollback` puts an earlier successful deployment back
 (default: the one before the live version). The node keeps the last 3 builds
 and reuses them; older git deployments are rebuilt from their exact commit.
+`restart --pull` pulls the newest image for the server's tag first, so
+`:latest`-style tags move to the registry's current release.
 `deployments redeploy` builds a deployment's exact commit again, for example
 to retry a failed build (default: the newest deployment).
 `health set` makes git deploys wait for the check before switching traffic,
