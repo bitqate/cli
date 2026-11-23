@@ -86,6 +86,24 @@ describe('pickRollbackTarget', () => {
     ]);
     expect(target?.id).toBe('1');
   });
+  test('an earlier upload is a target, the node decides if it still has it', () => {
+    const target = pickRollbackTarget([
+      {
+        id: '2',
+        status: 'success',
+        commit_sha: sha('b'),
+        created_at: '2026-10-25T02:00:00Z',
+      },
+      {
+        id: '1',
+        status: 'success',
+        triggered_by: 'upload',
+        commit_sha: '',
+        created_at: '2026-10-25T01:00:00Z',
+      },
+    ]);
+    expect(target?.id).toBe('1');
+  });
   test('returns null with nothing to go back to', () => {
     expect(
       pickRollbackTarget([

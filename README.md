@@ -170,8 +170,9 @@ servers  public-access get <id> | enable <id> | disable <id>
 
 `servers logs` prints the container's own output; `-f` keeps streaming
 across restarts and redeploys until Ctrl-C (NDJSON `{"t","line"}` with
-`--json`). `deployments rollback` rebuilds the exact commit of an earlier
-successful deployment (default: the one before the live version).
+`--json`). `deployments rollback` puts an earlier successful deployment back
+(default: the one before the live version). The node keeps the last 3 builds
+and reuses them; older git deployments are rebuilt from their exact commit.
 `deployments redeploy` builds a deployment's exact commit again, for example
 to retry a failed build (default: the newest deployment).
 `health set` makes git deploys wait for the check before switching traffic,
@@ -255,7 +256,7 @@ variable.
 
 Inside a git work tree, tracked files plus untracked files that are not gitignored are sent. Outside git, everything is sent except default excludes (`node_modules`, `.git`, `.next`, `.venv` and similar). `.dockerignore` filters on top either way, and the Dockerfile is always included.
 
-The archive must compress to 50 MB or less, so leave dependencies and build output out; they're rebuilt on the server. Your server's environment variables are available while the image builds and when it runs. Uploaded deployments can't be redeployed or rolled back because their files aren't kept, and on a GitHub-connected server the next push replaces the upload.
+The archive must compress to 50 MB or less, so leave dependencies and build output out; they're rebuilt on the server. Your server's environment variables are available while the image builds and when it runs. Uploaded deployments can't be redeployed because their files aren't kept. They can be rolled back to while they're among the last 3 builds the node keeps, and on a GitHub-connected server the next push replaces the upload.
 
 ### Deploy a stack with bitqate.toml
 

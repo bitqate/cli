@@ -780,6 +780,15 @@ for (const [op, internalOnly] of [
 
 // Without an explicit deployment: the newest successful one older than the
 // newest successful one, i.e. the version before the one that's live.
+const isCommitSha = (sha: unknown) => /^[0-9a-f]{40}$/i.test(String(sha ?? ''));
+
+export function isImageOnlyDeployment(d: any): boolean {
+  return (
+    d.triggered_by === 'upload' ||
+    (d.triggered_by === 'rollback' && !isCommitSha(d.commit_sha))
+  );
+}
+
 export function pickRollbackTarget(deployments: any[]): any | null {
   const ok = deployments
     .filter((d) => d.status === 'success')
@@ -787,11 +796,8 @@ export function pickRollbackTarget(deployments: any[]): any | null {
   return (
     ok
       .slice(1)
-      .find(
-        (d) =>
-          d.triggered_by !== 'upload' &&
-          /^[0-9a-f]{40}$/i.test(d.commit_sha ?? ''),
-      ) ?? null
+      .find((d) => isImageOnlyDeployment(d) || isCommitSha(d.commit_sha)) ??
+    null
   );
 }
 
@@ -815,11 +821,13 @@ export function findDeployment(
 
 register({
   path: ['servers', 'deployments', 'rollback'],
-  summary: 'Redeploy the commit of an earlier deployment',
+  summary: 'Go back to an earlier deployment',
   description:
-    'Rebuilds the exact commit of an earlier successful deployment with the ' +
-    'server’s current env vars. Without a deployment ID it picks the version ' +
-    'before the live one. The next push still deploys as usual.',
+    'Puts an earlier successful deployment back with the server’s current env ' +
+    'vars. The node keeps the last 3 builds and reuses them; older git ' +
+    'deployments are rebuilt from their exact commit, older uploads have to ' +
+    'be deployed again. Without a deployment ID it picks the version before ' +
+    'the live one. The next push still deploys as usual.',
   args: [
     { name: 'id', required: false, description: 'Server name or ID' },
     {
@@ -851,11 +859,6 @@ register({
     let target: any;
     if (ctx.args[1]) {
       target = findDeployment(list, ctx.args[1], name);
-      if (target.triggered_by === 'upload')
-        throw new CliError(
-          'usage',
-          "Uploaded deployments can't be rolled back; deploy the code again with --dir.",
-        );
     } else {
       target = pickRollbackTarget(list);
       if (!target)
@@ -869,7 +872,11 @@ register({
       .api()
       .post(['servers', id, 'deployments', target.id, 'rollback'], {});
     const deploymentId = resp?.deploymentId;
-    const sha = String(target.commit_sha).slice(0, 8);
+    const sha = isCommitSha(target.commit_sha)
+      ? String(target.commit_sha).slice(0, 8)
+      : `the upload from ${String(target.created_at ?? '')
+          .slice(0, 16)
+          .replace('T', ' ')}`;
     if (!ctx.flags.follow || !deploymentId) {
       return {
         data: {
